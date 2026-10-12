@@ -1,0 +1,142 @@
+{
+  "projectType": "saas",
+  "projectName": "WeKnora",
+  "projectDescription": "An open-source, LLM-powered knowledge platform that transforms documents into a queryable RAG system, an autonomous reasoning agent, and a self-maintaining wiki.",
+  "theme": "maple",
+  "primaryColor": "#101f38",
+  "lightColor": "#a1a8ab",
+  "darkColor": "#2f3a48",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation",
+              "configuration",
+              "troubleshooting"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/rag-pipeline",
+              "architecture/document-pipeline",
+              "architecture/async-tasks"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/knowledge-base",
+              "features/document-parsing",
+              "features/retrieval",
+              "features/agent",
+              "features/wiki",
+              "features/skills-sandbox"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/models",
+              "integrations/data-sources",
+              "integrations/im-channels",
+              "integrations/mcp",
+              "integrations/web-search",
+              "integrations/storage-backends"
+            ]
+          },
+          {
+            "group": "Administration",
+            "pages": [
+              "admin/tenants-auth",
+              "admin/observability",
+              "admin/platform-admin"
+            ]
+          },
+          {
+            "group": "Clients",
+            "pages": [
+              "clients/cli",
+              "clients/go-sdk",
+              "clients/chrome-extension",
+              "clients/embed-widget",
+              "clients/local-browser"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "development/dev-guide",
+              "development/extension-points",
+              "development/sandbox-deployment"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Resources",
+            "pages": [
+              "api/knowledge-bases",
+              "api/chat-sessions",
+              "api/agents",
+              "api/channels",
+              "api/models",
+              "api/tenants"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "RAG-based Q&A with hybrid keyword + vector search, reranking, parent-child chunking, and source citations",
+    "Autonomous ReAct agent with multi-step reasoning, MCP tool integration, skills sandbox, and local browser control",
+    "Auto-generated wiki with knowledge graph, in-browser editing, revision history, and rollback",
+    "29 built-in LLM vendors including OpenAI, DeepSeek, Qwen, Gemini, Ollama, and LiteLLM",
+    "Multi-workspace RBAC with four roles, scoped API keys, OIDC, and AES-256-GCM encryption",
+    "IM channel integrations for WeCom, Feishu, Slack, Telegram, DingTalk, and more",
+    "Data source auto-sync from Feishu, Confluence, GitLab, Notion, Yuque, and RSS",
+    "Session-persistent Docker/E2B/Cube skill sandboxes with interactive terminal and graphical desktop",
+    "Langfuse tracing for agent steps, token usage, and pipelines; task-queue dashboard",
+    "Single-binary Lite mode, Docker Compose, Helm/Kubernetes, and desktop app deployment options"
+  ],
+  "publicApiSurface": [
+    "POST /api/v1/auth/login — obtain JWT access and refresh tokens",
+    "POST /api/v1/auth/refresh — renew access token",
+    "GET/POST/PUT/DELETE /api/v1/knowledge-bases — CRUD knowledge bases",
+    "POST /api/v1/knowledge-bases/:id/knowledge — upload documents",
+    "GET /api/v1/knowledge-bases/:id/knowledge — list documents",
+    "POST /api/v1/sessions — create chat session",
+    "POST /api/v1/sessions/:id/messages — send message (supports SSE streaming)",
+    "GET /api/v1/sessions/:id/messages — list messages",
+    "GET/POST/PUT/DELETE /api/v1/tenants/:id/api-keys — manage API keys",
+    "GET/POST/PUT/DELETE /api/v1/agents — manage custom agents",
+    "GET/POST/PUT/DELETE /api/v1/models — manage LLM model configurations",
+    "GET/POST/PUT/DELETE /api/v1/mcp-endpoints — manage built-in MCP Server endpoints",
+    "POST /api/v1/mcp-endpoints/:id/tools — list MCP endpoint tools",
+    "/mcp/:endpoint_id — Streamable HTTP endpoint for MCP clients (Cursor, Claude)",
+    "GET /api/v1/knowledge-bases/:id/retrieve — hybrid search across knowledge base chunks",
+    "GET/POST/PUT/DELETE /api/v1/im-channels — manage IM integration channels",
+    "GET/POST/PUT/DELETE /api/v1/embed-channels — manage website embed channels",
+    "GET/POST/PUT/DELETE /api/v1/data-sources — manage external data source connectors",
+    "GET /health — health check (no auth required)",
+    "weknora CLI: profile, auth, kb, doc, chat, search, session, agent, model, mcp, skills commands"
+  ]
+}

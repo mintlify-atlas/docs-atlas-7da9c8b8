@@ -1,0 +1,205 @@
+---
+title: "LLM and Embedding Model Configuration"
+sidebarTitle: "Models"
+description: "Configure LLM, embedding, rerank, vision, and speech models from 29 built-in vendors. Add custom OpenAI-compatible endpoints, set per-model timeouts, and validate connections."
+---
+
+WeKnora centralises all model configuration in **Settings → Models**. Once a model is registered, every knowledge base and agent in the workspace can reference it. You can mix local Ollama models with remote API providers — for example, using a local BGE embedding model to generate vectors while a remote Qwen or Claude model handles reasoning and answer generation.
+
+<Warning>
+  Changing an embedding model requires **rebuilding the vector index** for every knowledge base that uses it. The old and new vectors exist in incompatible semantic spaces. Always test the new embedding model and confirm the connection before switching.
+</Warning>
+
+## Model Types
+
+| Type | Purpose |
+|------|---------|
+| **Chat (KnowledgeQA)** | Generates answers, summaries, and agent reasoning |
+| **Embedding** | Converts documents and queries into vectors for semantic retrieval |
+| **Rerank** | Re-scores retrieval candidates to improve ranking precision |
+| **Vision (VLLM)** | Understands images in documents or conversation attachments |
+| **Speech (ASR)** | Transcribes audio files to text |
+
+## Adding a Model
+
+<Steps>
+  <Step title="Open Settings → Models">
+    Navigate to **Settings → Models** and click **Add Model**.
+  </Step>
+  <Step title="Choose model type and source">
+    Select the model type (Chat, Embedding, Rerank, Vision, or Speech) and source:
+    - **API** — connects to a remote provider endpoint
+    - **Ollama** — uses a locally-running Ollama instance (Rerank models do not support Ollama)
+  </Step>
+  <Step title="Select a vendor">
+    Choose from the 29 built-in vendors. The list is filtered to only show vendors that support your chosen model type. Select **Custom (OpenAI-compatible)** if your provider is not listed.
+  </Step>
+  <Step title="Fill in the model name">
+    Pick from the vendor's built-in model catalog, which shows each model's context window, vector dimensions, reasoning support, and vision capability. Selecting a catalog entry auto-fills the context window, max output tokens, vision support, and dimensions. You can also type a model name that is not in the catalog.
+  </Step>
+  <Step title="Enter Base URL and API Key">
+    Provide the service endpoint, API key, and any vendor-specific extra fields (such as `api_version` for Azure OpenAI or `region` for Tencent LKEAP). Add custom request headers if your deployment routes traffic through an enterprise gateway.
+  </Step>
+  <Step title="Review the actual invocation details">
+    For Chat and Vision models, the **Actual Invocation** panel updates in real time, showing the request protocol, capability source (catalog entry or vendor default), request URL, thinking toggle parameters, thinking intensity options, context window, and max output tokens. Use this to confirm the model will be called as expected before saving.
+  </Step>
+  <Step title="Test the connection and save">
+    Click **Test Connection**. The test uses the current form values and does not require saving first. After a successful test, click **Save**.
+  </Step>
+</Steps>
+
+<Tip>
+  If you edit an existing model, the stored API key is used automatically during connection tests — you do not need to re-enter it. If you change the configuration after a test, run the test again before saving.
+</Tip>
+
+## Built-in Vendors
+
+WeKnora ships with 29 built-in vendors plus Ollama for local models.
+
+| Vendor | ID | Chat | Embed | Rerank | Vision | Speech |
+|--------|----|:----:|:-----:|:------:|:------:|:------:|
+| Custom (OpenAI-compatible) | `generic` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| WeKnora Cloud | `weknoracloud` | ✓ | ✓ | ✓ | ✓ | |
+| Alibaba DashScope | `aliyun` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Zhipu BigModel | `zhipu` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Volcengine | `volcengine` | ✓ | ✓ | ✓ | ✓ | |
+| Tencent Hunyuan | `hunyuan` | ✓ | ✓ | | | |
+| SiliconFlow | `siliconflow` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| MiniMax | `minimax` | ✓ | | | | ✓ |
+| Moonshot | `moonshot` | ✓ | | | ✓ | |
+| Xiaomi MiMo | `mimo` | ✓ | | | | ✓ |
+| ModelScope | `modelscope` | ✓ | ✓ | | ✓ | |
+| Baidu Qianfan | `qianfan` | ✓ | ✓ | ✓ | ✓ | |
+| Qiniu Cloud | `qiniu` | ✓ | | | | |
+| Meituan LongCat | `longcat` | ✓ | | | | |
+| Tencent LKEAP | `lkeap` | ✓ | | ✓ | | |
+| DeepSeek | `deepseek` | ✓ | | | | |
+| OpenAI | `openai` | ✓ | ✓ | | ✓ | ✓ |
+| Azure OpenAI | `azure_openai` | ✓ | ✓ | | ✓ | |
+| Anthropic | `anthropic` | ✓ | | | | |
+| Google Gemini | `gemini` | ✓ | ✓ | | | |
+| OpenRouter | `openrouter` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| LiteLLM | `litellm` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Requesty | `requesty` | ✓ | ✓ | | ✓ | ✓ |
+| Jina | `jina` | | ✓ | ✓ | | |
+| NVIDIA | `nvidia` | ✓ | ✓ | ✓ | ✓ | |
+| Novita AI | `novita` | ✓ | ✓ | ✓ | ✓ | |
+| GPUStack | `gpustack` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Hugging Face TEI | `huggingface_tei` | | | ✓ | | |
+| Pinecone | `pinecone` | | | ✓ | | |
+| Cohere | `cohere` | | | ✓ | | |
+
+<Note>
+  The vendor list, default endpoints, and model catalog are served dynamically from the backend (`GET /api/v1/models/providers`). Operators can add new vendors or override existing ones using a `config/models.json` overlay file without modifying source code.
+</Note>
+
+## Embedding Models
+
+Embedding models convert text (and optionally images) into vectors. When adding an embedding model, the following advanced options are available:
+
+<Accordion title="Vector dimensions">
+  The dimension count must match the index configuration. If you enable **Custom Output Dimensions**, the model must actually support dimension truncation — check your vendor's documentation first. Only enable this for models that explicitly support it.
+</Accordion>
+
+<Accordion title="Image input (multimodal embeddings)">
+  Enable this when the model can encode images into the same vector space as text. When enabled and the knowledge base has **Image Vector Search** turned on, WeKnora will store an additional image vector for each image alongside its text description. Supported models are automatically detected from the catalog; set this manually only when the catalog entry is incorrect.
+
+  For vLLM-deployed multimodal embedding models (VLM2Vec, GME, Qwen3-VL-Embedding), use the **Protocol Compatibility Override** to configure the image format. For example, Qwen3-VL-Embedding deployed under the Custom vendor is automatically pre-configured.
+</Accordion>
+
+<Accordion title="Context window">
+  Leave blank to use the default of 200,000 tokens. Set this to the real value documented by your vendor. Setting it too high prevents agent history compression from triggering, which may cause upstream rejection.
+</Accordion>
+
+## Model Metadata and the Catalog
+
+Each model in the catalog has structured metadata:
+
+| Metadata field | Description |
+|----------------|-------------|
+| **Context window** | Maximum input tokens the model accepts |
+| **Max output tokens** | Maximum tokens the model returns in one response |
+| **Reasoning** | Whether the model supports thinking/reasoning mode |
+| **Vision** | Whether the model accepts image inputs |
+| **Thinking levels** | Supported intensities: off, auto, minimal, low, medium, high, xhigh, max |
+
+When you select a model from the catalog, WeKnora auto-fills these fields. The **Actual Invocation** panel shows the resolved values, including which thinking intensity levels are actually available and how the thinking toggle will be transmitted to the API.
+
+## Thinking Mode Configuration
+
+For models that support extended reasoning (DeepSeek-R1, QwQ, Claude 3.7, Gemini 2.5, etc.), you can select the thinking intensity level when adding the model or in the agent/session settings. The intensity levels map to vendor-specific values:
+
+- WeKnora normalises thinking intensity to eight levels: `off`, `auto`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`
+- If the selected level is not supported by a particular model, WeKnora adjusts to the nearest available level
+- Some models cannot disable thinking (e.g., DeepSeek Reasoner, QwQ, Kimi K3) — their `off` level maps to `null` in the catalog
+
+## Per-Model Timeout and Concurrency
+
+In the **Advanced Options** section, you can configure:
+
+| Option | Applies to | Description |
+|--------|-----------|-------------|
+| **Max output tokens** | Chat, Vision | Upper limit for a single response. Leave blank to use the catalog default. |
+| **Background concurrency limit** | Chat, Vision, Embedding | Limits concurrent background tasks (document ingestion, enrichment). Set to `0` to use the global default. Does not affect interactive conversations. |
+| **Protocol compatibility override (JSON)** | Remote models | Fixes request fields that differ from the catalog defaults, e.g. `{"max_tokens_field": "max_tokens"}` or `{"supports_temperature": false}`. Only needed for self-hosted inference services or when a newly released model is not yet in the catalog. |
+| **Request timeout (seconds)** | Embedding, Rerank | Override the per-request timeout via `{"request_timeout_seconds": 120}` in the compat JSON. |
+
+## Model Debugger
+
+After saving a model, use the **Debug** button (or call `POST /api/v1/models/:id/debug`) to run a real test call:
+
+- **Chat models**: runs a streaming call and shows the elapsed time, the (redacted) request, the response, the actual protocol used, and the thinking toggle transmitted
+- **Embedding models**: returns the vector and its dimension count
+- **Rerank models**: returns scored results
+- **Vision / ASR models**: accepts an uploaded file
+
+The debugger is useful for checking that vector dimensions, rerank scores, and streaming output are working correctly before wiring a model to a knowledge base or agent.
+
+## Protocol Compatibility Override
+
+When a model behaves differently from the catalog default — for example, a self-hosted vLLM deployment or a gateway that rejects certain fields — you can patch the request behaviour using the **Advanced → Protocol Compatibility Override** JSON field.
+
+<CodeGroup>
+
+```json Reject temperature (reasoning models)
+{"supports_temperature": false}
+```
+
+```json Use max_tokens instead of max_completion_tokens
+{"max_tokens_field": "max_tokens"}
+```
+
+```json vLLM/SGLang hybrid thinking model
+{"thinking_format": "chat-template-kwargs"}
+```
+
+```json Disable streaming usage stats
+{"supports_usage_in_streaming": false}
+```
+
+```json Self-hosted reranker with unnormalized scores
+{"score_scale": "logit"}
+```
+
+</CodeGroup>
+
+<Note>
+  The compat JSON only needs keys that differ from the catalog default. Unspecified keys continue to use the catalog value. The JSON is validated on save — unknown keys, wrong value types, or invalid enum values will cause the save to fail with a descriptive error.
+</Note>
+
+## Vendor-Specific Extra Fields
+
+Some vendors require additional credential fields beyond a Base URL and API Key:
+
+| Vendor | Extra field | Type |
+|--------|-------------|------|
+| Azure OpenAI | `api_version` | Leave blank to use the `/openai/v1` data plane; set a version like `2025-04-01-preview` to use the legacy deployments path |
+| Tencent LKEAP | `SecretKey`, `region` | Rerank uses TC3 signing; API Key field holds SecretId |
+| Volcengine | `SecretKey`, `region`, `instruction` | Rerank uses AK/SK signing; API Key field holds Access Key ID |
+| Custom / GPUStack / LiteLLM | `score_scale` | Set to `probability` (BGE-style, 0–1) or `logit` (Qwen3-Reranker style, unbounded) |
+
+## Managing and Auditing Models
+
+- **Dependencies**: Before deleting a model, check which knowledge bases and agents reference it. The model detail page lists all dependents.
+- **Usage statistics**: All model calls emit structured log lines with `purpose` tags (e.g., `document_summary`, `entity_extraction`). When Langfuse is enabled, each call is also reported as a trace/span.
+- **Admin model catalog**: System administrators can view and edit the global model catalog in **Settings → System Admin → Model Catalog**, override context windows and max output tokens, hide deprecated models from dropdowns, and publish changes that take effect within 5 seconds across all running instances.

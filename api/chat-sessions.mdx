@@ -1,0 +1,282 @@
+---
+title: "Chat Sessions and Messages API Reference"
+sidebarTitle: "Chat Sessions"
+description: "Create chat sessions, send messages with real-time SSE streaming, load message history, upload attachments, and run knowledge retrieval without a session."
+---
+
+WeKnora's chat API is built around sessions — persistent conversation containers that track history, attachments, and generated files. Within a session you send messages and receive streaming responses via Server-Sent Events. Sessions are user-private: only the owning user (or a valid API Key with `chat` capability) can read or write to a session.
+
+**API Key capabilities required:** `chat` for session and message operations; `retrieve` for the standalone `knowledge-search` endpoint; `message_history` for history search.
+
+---
+
+## Create a Session
+
+`POST /api/v1/sessions`
+
+<ParamField body="title" type="string">
+  Optional session title. Auto-generated if omitted.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Optional description.
+</ParamField>
+
+```bash
+curl -X POST $BASE/api/v1/sessions \
+  -H "X-API-Key: $API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Q3 Analysis"}'
+```
+
+**Response:** `201 {"success":true,"data":{Session}}`
+
+<ResponseField name="id" type="string">Session ID.</ResponseField>
+<ResponseField name="title" type="string">Session title.</ResponseField>
+<ResponseField name="tenant_id" type="string">Owning workspace ID.</ResponseField>
+<ResponseField name="user_id" type="string">Owning user ID.</ResponseField>
+<ResponseField name="is_pinned" type="boolean">Whether the session is pinned.</ResponseField>
+<ResponseField name="last_request_state" type="object">Stores the last used reasoning effort and other per-session settings.</ResponseField>
+<ResponseField name="created_at" type="string">ISO 8601 timestamp.</ResponseField>
+
+---
+
+## List Sessions
+
+`GET /api/v1/sessions`
+
+<ParamField query="page" type="integer" default="1">Page number.</ParamField>
+<ParamField query="page_size" type="integer" default="20">Items per page.</ParamField>
+<ParamField query="keyword" type="string">Fuzzy search on session title.</ParamField>
+<ParamField query="source" type="string">Filter by source: `web`, `embed`, `api`, `feishu`, `wechat`, `slack`, etc.</ParamField>
+
+```bash
+curl "$BASE/api/v1/sessions?page=1&source=api" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+## Get / Update / Delete a Session
+
+```bash
+# Get
+curl $BASE/api/v1/sessions/s-1 -H "Authorization: Bearer $TOKEN"
+
+# Update (all fields optional)
+curl -X PUT $BASE/api/v1/sessions/s-1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Renamed Session","is_pinned":true}'
+
+# Delete
+curl -X DELETE $BASE/api/v1/sessions/s-1 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+## Send a Message (SSE Stream)
+
+`POST /api/v1/knowledge-chat/:session_id`  
+`POST /api/v1/agent-chat/:session_id`
+
+Both endpoints stream responses via Server-Sent Events. Use `knowledge-chat` for KB-grounded Q&A and `agent-chat` for full agent reasoning with tool calls.
+
+<ParamField body="query" type="string" required>
+  The user's question. Must be non-empty and valid UTF-8.
+</ParamField>
+
+<ParamField body="knowledge_base_ids" type="array">
+  Knowledge base IDs to search for context.
+</ParamField>
+
+<ParamField body="agent_id" type="string">
+  ID of a custom agent to use. Omit for the default quick-answer agent.
+</ParamField>
+
+<ParamField body="web_search_enabled" type="boolean">
+  Enable web search for this turn. Only takes effect if the agent has web search enabled.
+</ParamField>
+
+<ParamField body="reasoning_effort" type="string">
+  Override thinking depth for this turn: `off`, `auto`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Does not modify the agent permanently.
+</ParamField>
+
+<ParamField body="images" type="array">
+  Inline images as objects with `data` (base64), `url`, or `caption`.
+</ParamField>
+
+<ParamField body="attachment_ids" type="array">
+  IDs of previously uploaded session attachments to include as context.
+</ParamField>
+
+<ParamField body="mcp_service_ids" type="array">
+  MCP service IDs to @-mention for this turn.
+</ParamField>
+
+<ParamField body="tag_ids" type="array">
+  Limit KB retrieval to documents with these tags.
+</ParamField>
+
+<ParamField body="disable_title" type="boolean">
+  Prevent automatic session title generation on first message.
+</ParamField>
+
+```bash
+curl -N -X POST $BASE/api/v1/knowledge-chat/s-1 \
+  -H "X-API-Key: $API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "query": "What is the refund policy?",
+    "knowledge_base_ids": ["kb-1"]
+  }'
+```
+
+### SSE Event Stream Format
+
+```
+Content-Type: text/event-stream
+Cache-Control: no-cache
+```
+
+Each event is:
+```
+event: message
+data: {"id":"req-1","response_type":"answer","content":"The refund policy...","done":false}
+
+event: message
+data: {"id":"req-1","response_type":"references","knowledge_references":[...],"done":true}
+
+event: message
+data: {"id":"req-1","response_type":"complete","done":true,"usage":{"prompt_tokens":120,"completion_tokens":85,"total_tokens":205}}
+```
+
+**Event types for `agent-chat`:**
+
+| `response_type` | Description |
+|----------------|-------------|
+| `answer` | Incremental answer text delta |
+| `thinking` | Internal reasoning delta (when thinking is enabled) |
+| `tool_call` | Agent is about to call a tool |
+| `tool_result` | Tool execution result (`data.success` indicates success/failure) |
+| `references` | Knowledge base citations (`knowledge_references` array) |
+| `tool_approval_required` | Requires human approval before the tool runs |
+| `user_message_injected` | A steered message was delivered to the agent mid-run |
+| `error` | Fatal error for the entire turn |
+| `complete` | Turn is finished; includes `usage` |
+
+<Warning>
+  If `agent-chat` receives a second request while a smart-reasoning turn is already running, it returns HTTP 409. Use `POST /api/v1/sessions/:id/steer` to inject additional guidance into the running turn.
+</Warning>
+
+---
+
+## Load Message History
+
+`GET /api/v1/messages/:session_id/load`
+
+<ParamField query="limit" type="integer" default="20">Number of messages to return.</ParamField>
+<ParamField query="before_time" type="string">RFC 3339 timestamp for cursor-based backward pagination.</ParamField>
+
+```bash
+curl "$BASE/api/v1/messages/s-1/load?limit=20" \
+  -H "X-API-Key: $API_KEY"
+```
+
+**Response fields per message:**
+
+<ResponseField name="id" type="string">Message ID.</ResponseField>
+<ResponseField name="session_id" type="string">Parent session ID.</ResponseField>
+<ResponseField name="role" type="string">`user` or `assistant`.</ResponseField>
+<ResponseField name="content" type="string">Message text.</ResponseField>
+<ResponseField name="is_completed" type="boolean">Whether streaming finished normally.</ResponseField>
+<ResponseField name="images" type="array">Attached images.</ResponseField>
+<ResponseField name="attachments" type="array">Attached files.</ResponseField>
+<ResponseField name="agent_steps" type="array">Tool call steps for agent messages.</ResponseField>
+
+---
+
+## Stop Generation
+
+`POST /api/v1/sessions/:session_id/stop`
+
+<ParamField body="message_id" type="string" required>
+  The assistant message ID currently being generated.
+</ParamField>
+
+```bash
+curl -X POST $BASE/api/v1/sessions/s-1/stop \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"message_id":"m-1"}'
+```
+
+---
+
+## Resume a Disconnected Stream
+
+`GET /api/v1/sessions/continue-stream/:session_id`
+
+<ParamField query="message_id" type="string" required>
+  The assistant message ID to resume.
+</ParamField>
+
+```bash
+curl -N "$BASE/api/v1/sessions/continue-stream/s-1?message_id=m-1" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+The server replays stored events then resumes live polling at 100 ms intervals.
+
+---
+
+## Standalone Knowledge Search (No Session Required)
+
+`POST /api/v1/knowledge-search`
+
+Returns retrieval results using the same recall → rerank → merge pipeline as chat, without creating a session.
+
+<ParamField body="query" type="string" required>Search query.</ParamField>
+<ParamField body="knowledge_base_ids" type="array">KB IDs to search.</ParamField>
+<ParamField body="match_count" type="integer">Maximum results (default: workspace `rerank_top_k`, typically 10; max 200).</ParamField>
+<ParamField body="rerank" type="object">Rerank configuration object (see [Knowledge Bases](/api/knowledge-bases) for field details). Pass `{"enabled":false}` to disable reranking.</ParamField>
+
+```bash
+curl -X POST $BASE/api/v1/knowledge-search \
+  -H "X-API-Key: $API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"deployment requirements","knowledge_base_ids":["kb-1"]}'
+```
+
+---
+
+## Upload a Session Attachment
+
+`POST /api/v1/sessions/:session_id/attachments`
+
+Uploads a temporary file scoped to this session. Parse is asynchronous — poll the returned `status` field.
+
+```bash
+curl -X POST $BASE/api/v1/sessions/s-1/attachments \
+  -H "Authorization: Bearer $TOKEN" \
+  -F 'file=@notes.pdf'
+```
+
+**Response:** `202 {"success":true,"data":{"id":"a-1","status":"uploaded","file_name":"notes.pdf",...}}`
+
+Pass the attachment ID in `attachment_ids` when sending a message to include the parsed content as context.
+
+---
+
+## Session Management Shortcuts
+
+| Endpoint | Description |
+|----------|-------------|
+| `DELETE /api/v1/sessions/batch` | Delete multiple sessions (`ids` array or `delete_all:true`) |
+| `DELETE /api/v1/sessions/:id/messages` | Clear all messages in a session |
+| `POST /api/v1/sessions/:id/pin` | Pin a session |
+| `DELETE /api/v1/sessions/:id/pin` | Unpin a session |
+| `POST /api/v1/sessions/:id/fork` | Fork from a message ID into a new session |
+| `POST /api/v1/sessions/:id/rewind` | Rewind in-place to a message ID, deleting later messages |
+| `POST /api/v1/sessions/:id/generate_title` | Generate a title from provided messages |

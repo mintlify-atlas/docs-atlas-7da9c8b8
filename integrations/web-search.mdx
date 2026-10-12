@@ -1,0 +1,139 @@
+---
+title: "Web Search Providers for Agent Queries"
+sidebarTitle: "Web Search"
+description: "Configure DuckDuckGo, Bing, Google, Tavily, Baidu, SearXNG, Zhipu, Exa, Metaso, Bocha, Serply, and more so agents can search the internet during reasoning."
+---
+
+Web search lets agents supplement knowledge base content with live information from the internet. When an agent determines that it needs up-to-date information or facts not in its knowledge bases, it calls the `web_search` tool using the configured search provider, then optionally uses `web_fetch` to read the full content of relevant pages.
+
+Configure a search provider in **Settings → Web Search**, then enable it on the agent that should use it. Each workspace can have multiple named provider instances — for example, a "Production Bing" and a "Test SearXNG" — and agents reference them by ID.
+
+## Supported Providers
+
+| Provider | API key required | Endpoint | Notes |
+|----------|:---------------:|----------|-------|
+| **DuckDuckGo** | No | HTML scrape (API fallback) | Free; supports optional `proxy_url` |
+| **Google** | Yes (+ `engine_id`) | Google Custom Search API | Requires a Custom Search Engine ID |
+| **Bing** | Yes | `https://api.bing.microsoft.com/v7.0/search` | |
+| **Tavily** | Yes | `https://api.tavily.com/search` | |
+| **Ollama Web Search** | Yes | `https://ollama.com/api/web_search` | Returns at most 10 results |
+| **Baidu Qianfan AI Search** | Yes | `https://qianfan.baidubce.com/v2/ai_search/web_search` | |
+| **SearXNG** | No | Tenant-supplied `base_url` (self-hosted) | Only provider with a configurable endpoint |
+| **Keenable** | Optional | `https://api.keenable.ai` | No key = rate-limited public endpoint |
+| **Zhipu AI Search** | Yes | `https://open.bigmodel.cn/api/paas/v4/web_search` | Default engine: `search_std` |
+| **Exa** | Yes | `https://api.exa.ai/search` | Returns highlights by default |
+| **Metaso** | Yes | `https://metaso.cn/api/v1/search` | `scope` selects resource type |
+| **Bocha** | Yes | `https://api.bochaai.com/v1/web-search` | Supports `freshness` and `summary` |
+| **Brave Search** | Yes | `https://api.search.brave.com/res/v1/web/search` | Supports per-request `country`/`freshness` |
+| **Serply** | Yes | `https://api.serply.io/v1/search` | Google results; per-request `country`/`freshness` (pd/pw/pm/py only) |
+
+<Note>
+  All provider endpoints except SearXNG are hardcoded and cannot be configured by tenants. This is a deliberate SSRF prevention measure. SearXNG's `base_url` is the only tenant-configurable endpoint, and it is subject to SSRF validation.
+</Note>
+
+## Provider Configuration Fields
+
+Each provider instance has the following parameters:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `api_key` | string | Search service API key. Stored AES-256-GCM encrypted; only modifiable via the `/credentials` sub-resource. Never returned in API responses. |
+| `engine_id` | string | Google Custom Search only — your Custom Search Engine ID |
+| `base_url` | string | SearXNG only — URL of your self-hosted instance. Validated against SSRF rules; internal addresses must be in `SSRF_WHITELIST`. |
+| `proxy_url` | string | Optional outbound HTTP/HTTPS proxy for search requests (tunnels traffic only, does not replace the API endpoint). Also SSRF-validated. |
+| `extra_config` | map | Provider-specific extra parameters (see below) |
+
+### Provider-Specific Extra Config
+
+| Provider | Key | Values |
+|----------|-----|--------|
+| Metaso | `scope` | `webpage` (default), `document`, `scholar`, `podcast`, `video`, `image` |
+| Exa | `include_text` | `"true"` to fetch full page content; default is highlights only |
+| Bocha | `freshness` | `noLimit` (default), `oneDay`, `oneWeek`, `oneMonth`, `oneYear` |
+| Bocha | `summary` | Set to `"false"` to disable summary; default is enabled |
+
+## SearXNG Self-Hosted Deployment
+
+SearXNG is an open-source meta-search engine that aggregates results from multiple upstream search engines. WeKnora includes it as an optional Docker Compose profile for deployments that want a no-API-key search backend.
+
+To start WeKnora with SearXNG:
+
+```bash
+docker compose --profile searxng up -d
+```
+
+Key configuration details in `docker/searxng/settings.yml`:
+- `search.formats` includes `json` (WeKnora uses `/search?format=json`)
+- `server.limiter: false` disables IP rate limiting so the WeKnora backend isn't throttled. **Re-enable this if you expose SearXNG to the internet.**
+- The `secret_key` is substituted from the `SEARXNG_SECRET` environment variable at startup
+
+Environment variables for the SearXNG profile:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SEARXNG_PORT` | `8888` | Host port for SearXNG |
+| `SEARXNG_BIND` | `127.0.0.1` | Bind address |
+| `SEARXNG_SECRET` | — | Required secret key |
+
+<Warning>
+  Do not set `SEARXNG_PORT` to the same value as `APP_PORT` (default `8080`). On Linux, binding both services to the same port can cause requests to `localhost:8080` to be routed to SearXNG instead of the WeKnora app.
+</Warning>
+
+The app container adds `searxng` to the SSRF whitelist by default (`SSRF_WHITELIST_EXTRA=searxng,...`), so tenants can configure `base_url: http://searxng:8080` out of the box.
+
+To configure an agent to use the SearXNG instance:
+1. Go to **Settings → Web Search** and create a new provider
+2. Select **SearXNG** and set `base_url` to `http://searxng:8080`
+3. Save and test the connection
+4. In the agent settings, enable web search and select this provider
+
+## Per-Agent Web Search Settings
+
+Web search is configured at two levels:
+
+**Provider level**: Create one or more named provider configurations in Settings → Web Search. These are reusable across agents.
+
+**Agent level**: Enable or disable web search in the agent's settings and select which provider instance to use. You can also set the maximum number of search results the agent may request (1–20).
+
+**Session level**: Users can toggle web search on or off for individual sessions via the session settings icon. This overrides the agent's default for that session only.
+
+## How Agents Use Web Search
+
+The agent calls two tools to gather web information:
+
+**`web_search`** — discovers relevant pages:
+```json
+{"query": "Python 3.13 release notes", "count": 5}
+```
+With country/freshness filters (Brave and Serply only):
+```json
+{"query": "Rust release notes", "country": "DE", "freshness": "pw", "content": true}
+```
+
+**`web_fetch`** — reads the full content of specific pages:
+```json
+{"items": [{"url": "w1"}, {"url": "https://example.com/guide", "limit": 4000}]}
+```
+
+Key behaviours:
+- `count` ranges from 1 to the agent's configured maximum (up to 20)
+- `content: true` in `web_search` pre-fetches the body of the first 3 results (15-second budget, 5,000 characters each)
+- `web_fetch` accepts both raw URLs and the `wN` page IDs returned by `web_search`
+- Up to 8 items per `web_fetch` call; pages are cached in memory for character-range continuation
+- Full page content is saved to session storage and readable via `read_file` across conversation turns
+- All outbound requests pass through SSRF validation and use a secure HTTP client
+
+## Web Search Provider API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/web-search/providers` | List available provider types |
+| `GET` | `/api/v1/web-search-providers` | List configured provider instances |
+| `POST` | `/api/v1/web-search-providers` | Create a provider instance |
+| `PUT` | `/api/v1/web-search-providers/:id` | Update a provider instance |
+| `DELETE` | `/api/v1/web-search-providers/:id` | Delete a provider instance |
+| `POST` | `/api/v1/web-search-providers/test` | Test with unsaved parameters |
+| `POST` | `/api/v1/web-search-providers/:id/test` | Test a saved provider |
+| `PUT` | `/api/v1/web-search-providers/:id/credentials` | Update the API key |
+
+Admin permission is required for create, update, test, and delete operations.

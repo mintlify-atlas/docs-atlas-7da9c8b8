@@ -1,0 +1,315 @@
+---
+title: "IM and Embed Channel API Reference"
+sidebarTitle: "Channels"
+description: "Manage IM bot channels (Feishu, Slack, WeChat, etc.), embed widget channels, the anonymous token exchange flow, and data source integrations."
+---
+
+WeKnora supports publishing agents to end users through two types of channels: **IM channels** connect an agent to a third-party messaging platform (Feishu, Lark, Slack, Telegram, DingTalk, WeChat, and more); **embed channels** generate a JavaScript widget that can be embedded in any website. Channels are always bound to an agent and carry the platform credentials needed to send and receive messages.
+
+**Permission quick reference:** Channel listing requires Viewer+. Creating, updating, or deleting channels requires Admin+. API Keys need `manage_channels` or full-access.
+
+---
+
+## IM Channels
+
+### Create an IM Channel
+
+`POST /api/v1/agents/:id/im-channels`
+
+<ParamField body="platform" type="string" required>
+  Target platform: `wecom`, `feishu`, `lark`, `slack`, `telegram`, `dingtalk`, `mattermost`, `wechat`, `qqbot`, or `yunzhijia`.
+</ParamField>
+
+<ParamField body="name" type="string">
+  Display name for this channel.
+</ParamField>
+
+<ParamField body="mode" type="string" default="websocket">
+  Connection mode: `websocket`, `webhook`, or `longpoll`. WeChat is forced to `longpoll`; Mattermost and Yunzhijia default to `webhook`.
+</ParamField>
+
+<ParamField body="output_mode" type="string" default="stream">
+  Response delivery mode: `stream` (incremental) or `full` (complete response). WeChat is forced to `full`.
+</ParamField>
+
+<ParamField body="locale" type="string">
+  Reply language: `zh-CN`, `en-US`, `ja-JP`, `ko-KR`, or `ru-RU`. Empty string uses the deployment default (`WEKNORA_LANGUAGE`).
+</ParamField>
+
+<ParamField body="session_mode" type="string" default="user">
+  Session scoping: `user` (one session per user) or `thread` (one session per thread). `thread` is supported by Yunzhijia.
+</ParamField>
+
+<ParamField body="knowledge_base_id" type="string">
+  If set, attachments sent by IM users are also ingested into this KB. Must belong to the current workspace.
+</ParamField>
+
+<ParamField body="credentials" type="object">
+  Platform-specific credential object. Fields vary by platform (app ID, app secret, bot token, webhook URL, signing secret, etc.).
+</ParamField>
+
+<ParamField body="enabled" type="boolean" default="true">
+  Whether the channel is active.
+</ParamField>
+
+```bash
+curl -X POST $BASE/api/v1/agents/agent-1/im-channels \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "platform": "feishu",
+    "name": "Support Bot",
+    "locale": "en-US",
+    "credentials": {
+      "app_id": "cli_xxx",
+      "app_secret": "yyy",
+      "verification_token": "zzz"
+    }
+  }'
+```
+
+**Response:** `200 {"data":{IMChannel}}`
+
+<Note>
+  Creating a channel for a platform/bot combination that already exists returns HTTP 409.
+</Note>
+
+### List All IM Channels
+
+```bash
+# All channels across all agents in the workspace
+curl $BASE/api/v1/im-channels -H "Authorization: Bearer $TOKEN"
+
+# Channels for a specific agent
+curl $BASE/api/v1/agents/agent-1/im-channels -H "Authorization: Bearer $TOKEN"
+```
+
+### Update an IM Channel
+
+All fields are optional. Pass an empty string for `knowledge_base_id` to remove the KB association, or an empty string for `locale` to restore the deployment default language.
+
+```bash
+curl -X PUT $BASE/api/v1/im-channels/ch-1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"enabled":false,"locale":"zh-CN"}'
+```
+
+### Toggle and Delete
+
+```bash
+# Toggle enabled/disabled
+curl -X POST $BASE/api/v1/im-channels/ch-1/toggle \
+  -H "Authorization: Bearer $TOKEN"
+
+# Delete
+curl -X DELETE $BASE/api/v1/im-channels/ch-1 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### IM Platform Callbacks
+
+IM platforms send webhook events to:
+
+```
+POST /api/v1/im/callback/:channel_id
+GET  /api/v1/im/callback/:channel_id
+```
+
+These routes are registered **before** the authentication middleware and use each platform's own signature verification. Your reverse proxy must expose this path publicly.
+
+---
+
+## Embed Channels
+
+Embed channels power the JavaScript chat widget. Each channel has a `publish_token` used to authenticate anonymous visitors.
+
+### Create an Embed Channel
+
+`POST /api/v1/agents/:id/embed-channels`
+
+<ParamField body="name" type="string">
+  Channel display name.
+</ParamField>
+
+<ParamField body="allowed_origins" type="array" required>
+  Allowed origins for CORS and frame embedding. Use exact URLs or `*.domain.com` wildcards. The wildcard `*` is blocked in production.
+</ParamField>
+
+<ParamField body="enabled" type="boolean" default="true">
+  Whether the channel accepts visitor sessions.
+</ParamField>
+
+<ParamField body="welcome_message" type="string">
+  Greeting message shown when a visitor opens the widget.
+</ParamField>
+
+<ParamField body="rate_limit_per_minute" type="integer" default="30">
+  Maximum requests per IP per minute.
+</ParamField>
+
+<ParamField body="rate_limit_per_day" type="integer" default="10000">
+  Maximum requests per channel per day.
+</ParamField>
+
+<ParamField body="primary_color" type="string">
+  Widget accent color (hex code).
+</ParamField>
+
+<ParamField body="widget_position" type="string" default="bottom-right">
+  Widget placement: `bottom-right`, `bottom-left`, `top-right`, or `top-left`.
+</ParamField>
+
+<ParamField body="default_locale" type="string">
+  Widget UI language: `zh-CN`, `en-US`, `ko-KR`, `ja-JP`, `ru-RU`, or empty (follow browser).
+</ParamField>
+
+<ParamField body="allow_web_search" type="boolean" default="false">
+  Allow visitors to trigger web search.
+</ParamField>
+
+<ParamField body="allow_file_upload" type="boolean" default="false">
+  Allow visitors to upload files.
+</ParamField>
+
+<ParamField body="show_suggested_questions" type="boolean" default="true">
+  Show follow-up question suggestions.
+</ParamField>
+
+<ParamField body="webhook_url" type="string">
+  URL to receive visitor events (`message_sent`, `message_received`).
+</ParamField>
+
+```bash
+curl -X POST $BASE/api/v1/agents/agent-1/embed-channels \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "Website Chat",
+    "allowed_origins": ["https://example.com"],
+    "welcome_message": "Hi! How can I help you today?",
+    "primary_color": "#2563EB"
+  }'
+```
+
+**Response:** `201 {"success":true,"data":{embedChannelResponse}}` — includes `publish_token`.
+
+<Warning>
+  The `publish_token` is included in the creation response and is also available via `GET /api/v1/embed-channels/:channel_id`. Keep it confidential — anyone with this token can create visitor sessions on your channel.
+</Warning>
+
+### List and Manage Embed Channels
+
+```bash
+# All embed channels in the workspace (no publish tokens)
+curl $BASE/api/v1/embed-channels -H "Authorization: Bearer $TOKEN"
+
+# Get details for a specific channel (includes publish_token)
+curl $BASE/api/v1/embed-channels/ec-1 -H "Authorization: Bearer $TOKEN"
+
+# Update channel settings
+curl -X PUT $BASE/api/v1/embed-channels/ec-1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"welcome_message":"Hello! How can I help?"}'
+
+# Delete channel
+curl -X DELETE $BASE/api/v1/embed-channels/ec-1 \
+  -H "Authorization: Bearer $TOKEN"
+
+# Rotate publish token (old token is immediately invalidated)
+curl -X POST $BASE/api/v1/embed-channels/ec-1/rotate-token \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+## Embed Token Exchange Flow
+
+Anonymous visitors cannot use your Bearer token or API Key. Instead they go through a two-step token exchange:
+
+**Step 1:** Exchange `publish_token` → `session_token`
+
+```bash
+curl -X POST $BASE/api/v1/embed/ec-1/exchange \
+  -H "Authorization: Embed $PUBLISH_TOKEN"
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "session_token": "<short_lived_token>",
+    "expires_in": 3600
+  }
+}
+```
+
+**Step 2:** Create a visitor session
+
+```bash
+curl -X POST $BASE/api/v1/embed/ec-1/sessions \
+  -H "Authorization: Embed $SESSION_TOKEN"
+```
+
+```json
+{
+  "success": true,
+  "data": { "id": "s-1", "sig": "<session_sig>" }
+}
+```
+
+**Step 3:** Chat (requires `X-Embed-Session` header with the sig value)
+
+```bash
+curl -N -X POST $BASE/api/v1/embed/ec-1/knowledge-chat/s-1 \
+  -H "Authorization: Embed $SESSION_TOKEN" \
+  -H "X-Embed-Session: $SIG" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"What are your opening hours?"}'
+```
+
+---
+
+## Embed Public Endpoints Reference
+
+All embed visitor endpoints use `Authorization: Embed <token>` and live under `/api/v1/embed/:channel_id/`:
+
+| Method + Path | Description |
+|---------------|-------------|
+| `POST /exchange` | Exchange publish token for session token |
+| `GET /config` | Channel public config (no credentials) |
+| `GET /suggested-questions` | Starter suggested questions |
+| `POST /sessions` | Create a visitor session |
+| `POST /knowledge-chat/:session_id` | Knowledge Q&A (SSE) |
+| `POST /agent-chat/:session_id` | Agent Q&A (SSE) |
+| `GET /messages/:session_id/load` | Load session messages |
+| `POST /sessions/:session_id/stop` | Stop generation |
+| `GET /files` | Visitor-side image proxy |
+
+---
+
+## Data Sources
+
+Data sources define repeating ingestion pipelines (e.g., scheduled crawls from an external system).
+
+```bash
+# List
+curl $BASE/api/v1/data-sources -H "Authorization: Bearer $TOKEN"
+
+# Create
+curl -X POST $BASE/api/v1/data-sources \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Docs Site","type":"web_crawler","config":{...}}'
+
+# Update
+curl -X PUT $BASE/api/v1/data-sources/ds-1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"enabled":false}'
+
+# Delete
+curl -X DELETE $BASE/api/v1/data-sources/ds-1 \
+  -H "Authorization: Bearer $TOKEN"
+```

@@ -1,0 +1,532 @@
+---
+title: "WeKnora Development Guide: Local Setup"
+sidebarTitle: "Dev Guide"
+description: "Run WeKnora from source with hot-reload dev mode, set up PostgreSQL and Redis with a single make command, and follow the contributing guidelines."
+---
+
+WeKnora is built from three independently runnable processes — a Go backend (`cmd/server`), a Python gRPC document-reader (`docreader/`), and a Vue 3 frontend (`frontend/`) — plus a standalone CLI (`cli/`). The recommended workflow runs the infrastructure services in Docker and the app code locally, so you can modify and restart any layer without rebuilding images. This guide walks through the full local setup, the Makefile reference, the test suite, code style requirements, and the contribution process.
+
+## Prerequisites
+
+Before cloning and running WeKnora from source, make sure the following are installed:
+
+| Tool | Required version | Notes |
+|------|-----------------|-------|
+| **Go** | **1.26.0** | CGO required — DuckDB and sqlite-vec use native bindings (`go.mod`: `go 1.26.0`) |
+| **Node.js** | 22.x | Frontend uses `@tsconfig/node22`, Vite 7, Vue 3.5, TDesign |
+| **Python** | ≥ 3.10.18 | docreader (`docreader/pyproject.toml`: `requires-python`) |
+| **uv** | latest | Python dependency management — `pip install uv` |
+| **Docker + Docker Compose v2** | latest | Infrastructure services; `scripts/dev.sh` auto-detects the compose command |
+| **golangci-lint** | latest | `make lint` — see [golangci-lint.run](https://golangci-lint.run) for install |
+| **golang-migrate CLI** | latest | `go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest` |
+
+<Tip>
+  Run `make install-swagger` to install the `swag` CLI used by `make docs` to regenerate Swagger documentation.
+</Tip>
+
+---
+
+## Local Development Setup
+
+The fast dev mode keeps infrastructure in Docker and runs the Go backend and Vue frontend as local processes. Code changes in the backend require a quick restart (5–10 seconds); frontend changes hot-reload automatically.
+
+<Steps>
+
+### Clone and configure environment
+
+```bash
+git clone https://github.com/Tencent/WeKnora.git
+cd WeKnora
+cp .env.example .env
+# Edit .env as needed — LLM credentials, ports, etc.
+```
+
+`scripts/dev.sh` loads `.env` first, then applies `.env.local` as an override (optional). Use `.env.local` for local overrides without touching `.env`.
+
+### Start infrastructure services
+
+```bash
+make dev-start
+```
+
+This runs `./scripts/dev.sh start`, which uses `docker-compose.dev.yml` to start the default dependency stack: **ParadeDB/PostgreSQL**, **Redis**, and the **docreader** gRPC service. Langfuse tracing is also started by default.
+
+Pass optional profiles with `DEV_ARGS`:
+
+```bash
+make dev-start DEV_ARGS=--qdrant       # Add Qdrant
+make dev-start DEV_ARGS=--minio        # Add MinIO
+make dev-start DEV_ARGS=--neo4j        # Add Neo4j
+make dev-start DEV_ARGS=--full         # All optional services
+make dev-start DEV_ARGS=--no-langfuse  # Disable Langfuse
+make dev-start DEV_ARGS=--odl-hybrid   # Add OpenDataLoader PDF backend (large image)
+```
+
+<Note>
+  `docker-compose.dev.yml` only includes dependency services — not the `app` or `frontend`. Those run locally in the next steps.
+</Note>
+
+### Start the Go backend
+
+Open a **new terminal** and run:
+
+```bash
+make dev-app
+```
+
+This calls `./scripts/dev.sh app`, which executes `go run -ldflags=... ./cmd/server` with version metadata injected. The backend listens on port `8080` by default.
+
+<Tip>
+  Set `GIN_MODE=debug` in your `.env` to enable the Swagger UI at `http://localhost:8080/swagger/index.html`. In `release` mode (the Docker Compose default), Swagger routes are not registered.
+</Tip>
+
+### Start the Vue frontend
+
+Open another **new terminal** and run:
+
+```bash
+make dev-frontend
+```
+
+This calls `./scripts/dev.sh frontend`, which runs `cd frontend && npm install && npm run dev`. The Vite dev server starts on port **5173** and proxies `/api`, `/files`, and `/mcp/` to the backend.
+
+The proxy target is resolved in this order: `VITE_DEV_PROXY_TARGET` env var → `FRONTEND_BACKEND_URL` env var → `http://localhost:8080`. To proxy to a remote backend, set `VITE_DEV_PROXY_TARGET` in `.env.local`:
+
+```bash
+VITE_DEV_PROXY_TARGET=https://kb.example.com
+```
+
+### Verify the setup
+
+Open **http://localhost:5173** in your browser. Use the following commands to inspect the running services:
+
+```bash
+make dev-status   # Check container health
+make dev-logs     # Stream container logs
+```
+
+</Steps>
+
+---
+
+## Infrastructure Services Reference
+
+The `docker-compose.dev.yml` default stack and its optional profiles:
+
+| Service | Image | Port | Start condition |
+|---------|-------|------|-----------------|
+| `postgres` | `paradedb/paradedb:v0.25.11-pg17` | `5432` | Default |
+| `redis` | `redis:7.0-alpine` | `6379` | Default |
+| `docreader` | Local `docker/Dockerfile.docreader` | `50051` (gRPC) | Default |
+| `langfuse-web` + stack | Langfuse v3 | web `3000` | Default (`--no-langfuse` to disable) |
+| `searxng` | `searxng/searxng:latest` | `127.0.0.1:8888` | `--searxng` / `--full` |
+| `minio` | `pgsty/minio:latest` | `9000` / `9001` | `--minio` / `--full` |
+| `qdrant` | `qdrant/qdrant:v1.16.2` | `6333` / `6334` | `--qdrant` / `--full` |
+| `opensearch` | `opensearchproject/opensearch:3.3.2` | `9200` | `--full` |
+| `milvus` | `milvusdb/milvus:v2.6.11` | `19530` | `--full` |
+| `neo4j` | `neo4j:latest` | `7474` / `7687` | `--neo4j` / `--full` |
+| `dex` | `dexidp/dex:latest` | `5556` | `--dex` / `--full` |
+| `odl-hybrid` | Local `docker/Dockerfile.odl-hybrid` | `5002` | `--odl-hybrid` |
+
+---
+
+## Running docreader Locally
+
+By default `make dev-start` runs docreader in a container. To debug Python code directly:
+
+```bash
+cd docreader
+uv sync                         # Install dependencies per uv.lock
+uv run -m docreader.main        # Start gRPC service on DOCREADER_GRPC_PORT (default 50051)
+```
+
+Stop the container first: `docker compose -f docker-compose.dev.yml stop docreader`.
+
+---
+
+## Lite Mode (Zero External Dependencies)
+
+Lite mode compiles SQLite (with sqlite-vec) and an in-memory task queue into a single binary — ideal for local evaluation or the desktop app:
+
+```bash
+make build-lite       # Build frontend to web/, then CGO-compile with tags sqlite_fts5
+make run-lite         # Build and run using .env.lite defaults
+make package-lite     # Package a distributable tarball
+make package-mac-app  # Package macOS .app bundle
+```
+
+Set `SKIP_FRONTEND=1` to skip the frontend build step when iterating on the backend only.
+
+---
+
+## Makefile Reference
+
+### Build & run
+
+| Target | What it does |
+|--------|-------------|
+| `build` | `go build -o WeKnora ./cmd/server` |
+| `run` | Build then run `./WeKnora` |
+| `build-prod` | Production build with `CGO_ENABLED=1`, `-ldflags "-w -s"`, version injection |
+| `clean` | `go clean` and remove binary |
+| `deps` | `go mod download` |
+| `docs` | `swag init` — generate Swagger JSON into `./docs/` |
+| `install-swagger` | `go install github.com/swaggo/swag/cmd/swag@latest` |
+
+### Code quality
+
+<CodeGroup>
+
+```bash Format
+make fmt
+# Runs: go fmt ./...
+# Note: gofumpt is the stricter standard enforced by golangci-lint
+```
+
+```bash Lint
+make lint
+# Runs: golangci-lint run
+# Config: .golangci.yml (version 2 format)
+# Linters: lll (120 col), govet, revive
+# Formatters: gofmt, gofumpt
+```
+
+```bash Test
+make test
+# Runs: go test -v ./...
+# Most packages use go-sqlmock / miniredis in-memory stubs (no real DB needed)
+```
+
+</CodeGroup>
+
+Run all three before pushing:
+
+```bash
+make fmt && make lint && make test
+```
+
+### Database migrations
+
+| Target | What it does |
+|--------|-------------|
+| `migrate-up` | Apply all pending migrations (`scripts/migrate.sh up`) |
+| `migrate-down` | Roll back one migration |
+| `migrate-version` | Show current version and dirty flag |
+| `migrate-create name=add_xxx` | Create a new versioned up/down SQL pair |
+| `migrate-force version=N` | Force-set version (dirty state recovery) |
+| `migrate-goto version=N` | Migrate/roll back to a specific version |
+
+### Dev mode
+
+| Target | What it does |
+|--------|-------------|
+| `dev-start` | Start infrastructure via `scripts/dev.sh start` |
+| `dev-stop` | Stop infrastructure |
+| `dev-restart` | Restart infrastructure |
+| `dev-logs` | Stream service logs |
+| `dev-status` | Show container status |
+| `dev-app` | Run backend locally |
+| `dev-frontend` | Run frontend locally |
+
+### Model catalog
+
+| Target | What it does |
+|--------|-------------|
+| `model-catalog-generate` | `python3 scripts/model-catalog/generate.py` — regenerate vendor metadata |
+| `model-catalog-check` | Verify generated data is current; run `go test ./internal/models/...` |
+| `model-catalog-diff` | Diff against models.dev (human review only; pass `VENDOR=deepseek` to narrow) |
+
+---
+
+## Database Schema and Migrations
+
+WeKnora uses [golang-migrate v4](https://github.com/golang-migrate/migrate) for versioned schema management. The migration files live in:
+
+```text
+migrations/
+├── versioned/     # PostgreSQL/ParadeDB: 000000–000110 (111 versions, 222 SQL files)
+├── sqlite/        # SQLite: 000000_init (full schema) + 000001–000030 incremental
+├── paradedb/      # ParadeDB supplementary scripts
+└── mysql/         # Legacy one-off init script (not wired to application code)
+```
+
+### Automatic migration on startup
+
+By default the app runs migrations automatically. Two environment variables control this behaviour (set in `internal/container/container.go`):
+
+| Variable | Default | Behaviour |
+|----------|---------|-----------|
+| `AUTO_MIGRATE` | `true` | Run pending migrations at startup. Set to `false` to disable. |
+| `AUTO_RECOVER_DIRTY` | `true` | Auto-recover a `dirty` migration state. Set to `false` to require manual `migrate-force`. |
+
+Migration failures emit a `Warn` log (`Database migration failed`) but **do not block startup**. Always check startup logs after an upgrade.
+
+The migration path is selected at runtime:
+
+```go
+// internal/database/migration.go
+migrationsPath := "file://migrations/versioned"
+if strings.HasPrefix(dsn, "sqlite3://") {
+    migrationsPath = "file://migrations/sqlite"
+}
+```
+
+When `RETRIEVE_DRIVER` does not include `postgres`, the migrate DSN carries `options=-c app.skip_embedding=true` so `embeddings`-table migrations are conditionally skipped.
+
+### Adding a migration
+
+<Steps>
+
+### Create the file pair
+
+```bash
+make migrate-create name=add_my_feature
+# Creates migrations/versioned/<next_version>_add_my_feature.up.sql
+#          and migrations/versioned/<next_version>_add_my_feature.down.sql
+```
+
+### Write the SQL
+
+Use PostgreSQL dialect (`JSONB`, `TIMESTAMP WITH TIME ZONE`, partial indexes). If the migration touches the `embeddings` table, guard it with the `app.skip_embedding` GUC:
+
+```sql
+-- Only run when postgres retrieval engine is active
+DO $$
+BEGIN
+  IF current_setting('app.skip_embedding', true) IS DISTINCT FROM 'true' THEN
+    -- your DDL here
+  END IF;
+END $$;
+```
+
+### Mirror to SQLite
+
+Add the same change to `migrations/sqlite/` with dialect adjustments (`JSONB→TEXT`, `SERIAL→INTEGER AUTOINCREMENT`, `TIMESTAMPTZ→DATETIME`). Update `internal/database/migration_sqlite_versioned_schema_test.go`.
+
+### Update Go types
+
+Add the corresponding struct fields in `internal/types/`. GORM is used for ORM mapping only — production schema is entirely driven by SQL migrations, **not** `AutoMigrate`.
+
+### Validate
+
+```bash
+make migrate-up && make migrate-down && make migrate-up
+```
+
+</Steps>
+
+<Warning>
+  Never add duplicate version numbers. `golang-migrate` fails to load a directory with duplicate version prefixes, breaking all deployments. CI catches this via `internal/database/migration_versions_test.go`.
+</Warning>
+
+---
+
+## Testing
+
+### Go unit tests
+
+```bash
+make test                                        # go test -v ./...
+go test ./internal/infrastructure/chunker/...   # Single package
+go test -run TestXxx ./internal/application/service/...
+```
+
+Most tests use in-memory stubs (`go-sqlmock`, `miniredis`) and do not require a live database. Some packages depend on CGO (DuckDB, sqlite-vec).
+
+### docreader tests (Python)
+
+Tests live in `docreader/tests/` and use the standard `unittest` library:
+
+```bash
+cd docreader
+uv sync
+uv run python -m unittest discover -s tests -v      # All tests
+uv run python -m unittest tests.test_parser_routing # Single module
+```
+
+Coverage includes parser routing, concurrency, EPUB/Excel/MHTML/PDF parsing, and SSRF protection.
+
+### CLI tests
+
+The CLI is an independent Go module with its own `Makefile`:
+
+```bash
+cd cli
+make test           # go test ./...
+make test-coverage  # With coverage profile
+make lint           # go vet
+```
+
+End-to-end acceptance tests in `cli/acceptance/e2e/` require `WEKNORA_E2E_HOST` and `WEKNORA_E2E_TOKEN` environment variables pointing at a live server. They are triggered manually via the `acceptance-e2e` PR label or `workflow_dispatch`.
+
+### Frontend tests
+
+```bash
+cd frontend
+npm run type-check   # vue-tsc TypeScript check
+npm test             # tsx --test (Node test runner)
+```
+
+---
+
+## Code Style
+
+### Go formatting and linting
+
+The repository uses **gofumpt** (stricter than `gofmt`) with a 120-character line limit, enforced by golangci-lint v2. The `.golangci.yml` configuration:
+
+```yaml
+version: "2"
+linters:
+  enable:
+    - lll           # Line width (120 columns)
+    - govet
+    - revive
+  settings:
+    lll:
+      line-length: 120
+      tab-width: 4
+  exclusions:
+    paths:
+      - docs/docs\.go$   # Single-line Swagger JSON is exempt
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+```
+
+### Git hooks
+
+Install the repository's Git hooks for automated pre-commit and pre-push checks:
+
+```bash
+./scripts/install-git-hooks.sh
+```
+
+The **pre-commit** hook checks whitespace, auto-runs `gofmt`, and runs `golangci-lint` if installed. The **pre-push** hook runs `gofmt`, `go vet`, `go test`, and `go build`. Override with `SKIP_HOOKS=1` (all hooks) or `HOOK_SKIP_TEST=1` (skip pre-push tests only).
+
+### Third-party notices
+
+When adding or upgrading a third-party dependency, update `THIRD_PARTY_NOTICES.md` and `licenses/`. Run `scripts/check-license-bundle.sh` to self-verify — the same check runs in CI (`workflows/app.yml`).
+
+---
+
+## Swagger UI
+
+The Swagger UI is served by the Go backend at `/swagger/index.html`. It is only available when `GIN_MODE=debug`.
+
+<Tabs>
+  <Tab title="Local dev (make dev-app)">
+    Set `GIN_MODE=debug` in `.env`, then:
+
+    ```bash
+    make dev-app
+    # Open http://localhost:8080/swagger/index.html
+    ```
+  </Tab>
+  <Tab title="Docker Compose">
+    Set `GIN_MODE=debug` in `.env`, then recreate the `app` container (a restart alone does not update container environment):
+
+    ```bash
+    docker compose up -d --no-deps --force-recreate app
+    docker compose exec app printenv GIN_MODE   # Should print: debug
+    # Open http://localhost:8080/swagger/index.html
+    ```
+
+    Restore `GIN_MODE=release` and recreate the container when done.
+  </Tab>
+</Tabs>
+
+<Warning>
+  The frontend Vite dev server (port 5173) and the nginx-based Docker frontend (port 80) do **not** proxy `/swagger/`. Always access the Swagger UI directly on the backend port (default `8080`).
+</Warning>
+
+---
+
+## Contribution Workflow
+
+<Steps>
+
+### Fork and branch
+
+Fork the repository on GitHub, then create a feature branch:
+
+```bash
+git checkout -b feat/my-feature
+```
+
+### Validate locally
+
+For a focused PR, target the changed scope:
+
+```bash
+git fetch origin main
+git diff --check origin/main...HEAD
+golangci-lint run --new-from-rev=origin/main ./...
+go test ./path/to/changed/package -count=1
+```
+
+Run the full gate before opening the PR:
+
+```bash
+make fmt && make lint && make test
+```
+
+### Commit with Conventional Commits
+
+Follow the [Conventional Commits](https://www.conventionalcommits.org/) specification:
+
+```
+feat: add support for XYZ parser
+fix: correct chunker overlap calculation
+docs: update extension points guide
+test: add unit tests for retriever registry
+refactor: simplify container init order
+```
+
+### Open a pull request
+
+Push your branch and open a PR against `main`. Fill in the pull request template. CI automatically triggers path-scoped checks (`app.yml`, `frontend.yml`, `docreader.yml`, etc.) for modified files.
+
+</Steps>
+
+---
+
+## Debugging Tips
+
+<Accordion title="Log level and request tracing">
+  Log level is controlled by the `LOG_LEVEL` environment variable (`debug` / `info` / `warn` / `error` / `fatal`). The default when unset is `debug`. Each request carries an `X-Request-ID` header that is propagated through both the app and docreader logs — use it to correlate entries across services.
+</Accordion>
+
+<Accordion title="LLM tracing with Langfuse">
+  `make dev-start` launches a self-hosted Langfuse instance at `http://localhost:3000`. Export the following before running `make dev-app` to send traces:
+
+  ```bash
+  export LANGFUSE_HOST=http://localhost:3000
+  export LANGFUSE_PUBLIC_KEY=pk-lf-xxx
+  export LANGFUSE_SECRET_KEY=sk-lf-xxx
+  ```
+
+  Agent steps, tool calls, token usage, and document processing spans appear in the Langfuse UI.
+</Accordion>
+
+<Accordion title="Chunker diagnostics">
+  The chunker exposes `SplitWithDiagnostics()` (`internal/infrastructure/chunker/strategy.go`), which returns the strategy chain selected, per-tier rejection reasons, and the document profile. Combine with `LOG_LEVEL=debug` to see `chunker: tier %s rejected` log entries.
+</Accordion>
+
+<Accordion title="Database dirty state recovery">
+  If a migration was interrupted, `schema_migrations.dirty = true` blocks subsequent runs.
+
+  ```bash
+  make migrate-version      # e.g. "74 (dirty)"
+  # Inspect the failed SQL, confirm schema is at version 73
+  make migrate-force version=73
+  make migrate-up
+  ```
+
+  `AUTO_RECOVER_DIRTY=true` (the default) attempts recovery automatically at startup.
+</Accordion>
+
+<Accordion title="pprof profiling">
+  There is no built-in pprof endpoint. To add one temporarily, import `_ "net/http/pprof"` in `cmd/server/main.go` and start a separate `http.ListenAndServe("localhost:6060", nil)`. For package-level benchmarks, use `go test -bench . -cpuprofile`.
+</Accordion>

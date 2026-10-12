@@ -1,0 +1,324 @@
+---
+title: "Configure WeKnora: Environment Variables Guide"
+sidebarTitle: "Configuration"
+description: "Complete reference for WeKnora's .env configuration groups: required secrets, database, retrieval, models, auth, agent sandbox, observability, and security."
+---
+
+WeKnora reads its configuration from four layers, applied in order from lowest to highest priority: the `config/config.yaml` file (shipped with the image), environment variables in `.env` (deployment-level overrides), and runtime system settings stored in the database (editable at **Settings → System** in the UI, taking precedence over environment variables and requiring no restart for most keys).
+
+This page covers the environment variable layer—the `.env` file you copy from `.env.example`. After editing `.env`, recreate affected containers with `docker compose up -d <service>` (a plain `docker compose restart` does not reload environment variables).
+
+<Note>
+  Some settings that appear as environment variables can also be changed at runtime through the system settings UI. If an env var change does not seem to take effect, check whether the same key has already been overridden via **Settings → System**.
+</Note>
+
+## Minimal and Full .env Examples
+
+<CodeGroup>
+
+```ini Minimal .env (local development)
+# Required secrets — generate once
+JWT_SECRET=<openssl rand -hex 32>
+SYSTEM_AES_KEY=<openssl rand -hex 16>
+
+# Database
+DB_USER=postgres
+DB_PASSWORD=postgres123!@#
+DB_NAME=WeKnora
+REDIS_PASSWORD=redis123!@#
+
+# Runtime
+GIN_MODE=release
+WEKNORA_VERSION=latest
+AUTO_MIGRATE=true
+TZ=Asia/Shanghai
+
+# Storage and retrieval (defaults)
+STORAGE_TYPE=local
+RETRIEVE_DRIVER=postgres
+STREAM_MANAGER_TYPE=redis
+REDIS_ADDR=redis:6379
+DOCREADER_ADDR=docreader:50051
+DOCREADER_TRANSPORT=grpc
+OLLAMA_BASE_URL=http://host.docker.internal:11434
+OLLAMA_OPTIONAL=true
+```
+
+```ini Production .env (recommended hardening)
+# Required secrets
+JWT_SECRET=<openssl rand -hex 32>
+SYSTEM_AES_KEY=<openssl rand -hex 16>
+SYSTEM_SIGNING_KEY=<openssl rand -hex 32>
+
+# Database
+DB_USER=weknora_prod
+DB_PASSWORD=<very-strong-password>
+DB_NAME=WeKnora
+REDIS_PASSWORD=<very-strong-password>
+
+# Runtime
+GIN_MODE=release
+WEKNORA_VERSION=v0.8.2
+AUTO_MIGRATE=true
+TZ=UTC
+DEFAULT_LOCALE=en-US
+
+# Disable public registration
+DISABLE_REGISTRATION=true
+WEKNORA_AUTH_COMPLEX_PASSWORD_ENABLED=true
+WEKNORA_TENANT_ENABLE_RBAC=true
+
+# Storage: MinIO (S3-compatible)
+STORAGE_TYPE=minio
+MINIO_ENDPOINT=minio:9000
+MINIO_ACCESS_KEY_ID=<key>
+MINIO_SECRET_ACCESS_KEY=<secret>
+MINIO_BUCKET_NAME=weknora
+
+# Retrieval: PostgreSQL (default)
+RETRIEVE_DRIVER=postgres
+STREAM_MANAGER_TYPE=redis
+REDIS_ADDR=redis:6379
+
+# Observability
+LANGFUSE_PUBLIC_KEY=pk-lf-xxxxxxxx
+LANGFUSE_SECRET_KEY=sk-lf-xxxxxxxx
+LANGFUSE_HOST=http://langfuse-web:3000
+
+# Security
+SSRF_DNS_WHITELIST_ONLY=false
+CONCURRENCY_POOL_SIZE=5
+```
+
+</CodeGroup>
+
+---
+
+## A. Deployment Basics
+
+These variables control the image version, Gin runtime mode, logging, timezone, and service addressing.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WEKNORA_VERSION` | `latest` | Image tag to pull. Use a pinned version like `v0.8.2` for production. |
+| `GIN_MODE` | `release` | `debug` enables verbose logging and Swagger UI at `/swagger/index.html`. `release` disables Swagger. |
+| `LOG_LEVEL` | `debug` | `debug` / `info` / `warn` / `error` / `fatal` |
+| `LOG_PATH` | _(empty)_ | Log file path. Leave empty to write to stdout only. |
+| `LLM_DEBUG_LOG` | `false` | Set `true` to write full LLM request/response dumps to `llm_debug.log` beside `LOG_PATH`. |
+| `TZ` | `Asia/Shanghai` | Container timezone. Affects log timestamps and scheduled job times. |
+| `DEFAULT_LOCALE` | _(empty)_ | Frontend default language: `zh-CN`, `zh-TW`, `en-US`, `ru-RU`, `ko-KR`, `ja-JP`. Affects users who have not manually selected a language. Requires frontend container restart. |
+| `WEKNORA_LANGUAGE` | _(empty)_ | Language for document processing (question generation, summaries). Priority: this variable → `Accept-Language` header → `zh-CN`. |
+| `AUTO_MIGRATE` | `true` | Run database migrations automatically on startup. Set `false` to manage migrations manually. |
+| `APP_EXTERNAL_URL` | _(empty)_ | Publicly reachable URL of this WeKnora instance (e.g. `https://weknora.example.com`). Required for IM channels to render knowledge base images when using local or internal-only storage. |
+| `FRONTEND_BASE_URL` | _(empty)_ | External origin used for invitation links and other absolute URLs. |
+
+---
+
+## B. Data and Storage
+
+### B1. PostgreSQL (required)
+
+<Warning>
+  `DB_USER`, `DB_PASSWORD`, and `DB_NAME` are required. The default values in `.env.example` are placeholders—change them before any network-accessible deployment.
+</Warning>
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DB_DRIVER` | `postgres` | `postgres` for standard deployment; `sqlite` for Lite mode. |
+| `DB_HOST` | `postgres` | PostgreSQL hostname (Docker service name or remote host). |
+| `DB_PORT` | `5432` | PostgreSQL port. |
+| `DB_USER` | _(empty)_ | **Required.** |
+| `DB_PASSWORD` | _(empty)_ | **Required.** |
+| `DB_NAME` | _(empty)_ | **Required.** |
+| `DB_PATH` | _(empty)_ | SQLite file path when `DB_DRIVER=sqlite`. |
+
+### B2. Redis and Task Queue
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STREAM_MANAGER_TYPE` | `redis` | `redis` for standard deployment; `memory` for Lite. |
+| `REDIS_ADDR` | `redis:6379` | Redis address. Leave empty to disable Redis (Lite mode). |
+| `REDIS_PASSWORD` | _(empty)_ | Redis password. |
+| `REDIS_DB` | `0` | Redis database index. |
+| `REDIS_USE_TLS` | `false` | Enable TLS for managed Redis (e.g. AWS ElastiCache). |
+| `REDIS_TLS_SERVER_NAME` | _(empty)_ | SNI/certificate hostname for TLS verification. |
+| `REDIS_TLS_INSECURE_SKIP_VERIFY` | `false` | Skip TLS certificate verification. For development only. |
+
+**Asynq worker concurrency** — these control the async task pipeline:
+
+| Variable | Default | Queues |
+|----------|---------|--------|
+| `WEKNORA_ASYNQ_CORE_CONCURRENCY` | `8` | Document parsing main pipeline |
+| `WEKNORA_ASYNQ_POSTPROCESS_CONCURRENCY` | `2` | Post-processing / fanout after parsing |
+| `WEKNORA_ASYNQ_ENRICHMENT_CONCURRENCY` | `12` | Summaries, multimodal, graph extraction, question generation |
+| `WEKNORA_ASYNQ_MAINTENANCE_CONCURRENCY` | `4` | Data source sync, batch re-parse, KB clone/delete |
+| `WEKNORA_ASYNQ_SHARED_CONCURRENCY` | `6` | Elastic pool; borrows from CORE/ENRICHMENT queues |
+| `WEKNORA_WIKI_ASYNQ_CONCURRENCY` | `8` | Wiki generation |
+| `WEKNORA_MODEL_MAX_CONCURRENCY` | `32` | Per-model concurrency cap for background tasks |
+
+### B3. File Storage
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STORAGE_TYPE` | `local` | `local` / `minio` / `cos` / `tos` / `s3` / `obs` / `oss` |
+| `LOCAL_STORAGE_BASE_DIR` | `/data/files` | Root directory for local storage. |
+| `MAX_FILE_SIZE_MB` | `50` | Per-file upload size limit. Applied to app, Nginx, and docreader. Requires restart of all three. |
+| `MINIO_ENDPOINT` | `minio:9000` | MinIO endpoint (host:port). Must be publicly reachable for IM channels. |
+| `MINIO_ACCESS_KEY_ID` | `minioadmin` | MinIO access key. |
+| `MINIO_SECRET_ACCESS_KEY` | `minioadmin` | MinIO secret key. |
+| `MINIO_BUCKET_NAME` | _(empty)_ | MinIO bucket name. |
+
+For AWS S3, leaving `S3_ACCESS_KEY` and `S3_SECRET_KEY` both empty activates the AWS SDK default credential chain (IAM Role, IRSA, environment variables, shared config). All storage provider variables (`COS_*`, `TOS_*`, `OBS_*`, `OSS_*`) follow the same pattern: `ENDPOINT`, `REGION`, `ACCESS_KEY`, `SECRET_KEY`, `BUCKET_NAME`, `PATH_PREFIX`.
+
+---
+
+## C. Retrieval and Knowledge Graph
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RETRIEVE_DRIVER` | `postgres` | Retrieval engine(s). Comma-separate multiple drivers for parallel fanout: `postgres`, `elasticsearch_v7`, `elasticsearch_v8`, `opensearch`, `qdrant`, `milvus`, `weaviate`, `doris`, `tencent_vectordb`, `sqlite` (Lite). |
+| `MULTI_STORE_RETRIEVE_TIMEOUT_SEC` | _(empty)_ | Timeout in seconds for parallel multi-store retrieval. |
+| `NEO4J_ENABLE` | _(empty)_ | Set `true` to enable GraphRAG (knowledge graph build and retrieval). |
+| `NEO4J_URI` | `bolt://neo4j:7687` | Neo4j connection URI. `bolt://` for single-node (recommended); `neo4j://` for cluster routing. |
+| `NEO4J_USERNAME` | `neo4j` | Neo4j username. |
+| `NEO4J_PASSWORD` | `password` | Neo4j password. Change before any network-accessible deployment. |
+
+Each vector database has its own variable group (e.g. `QDRANT_HOST`, `QDRANT_PORT`, `QDRANT_COLLECTION`, `MILVUS_ADDRESS`, `MILVUS_COLLECTION`, `WEAVIATE_HOST`, etc.). See `.env.example` section C for the full list.
+
+---
+
+## D. Models
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Ollama server URL. All `source=local` models (chat and embedding) share this single process. |
+| `OLLAMA_OPTIONAL` | `true` | If `true`, an unreachable Ollama server logs a warning but does not block startup. |
+| `BATCH_EMBED_SIZE` | _(empty)_ | Batch size for embedding requests. Leave empty to use the code default. |
+| `VLM_HTTP_TIMEOUT_SECONDS` | `180` | Per-request timeout for VLM (vision language model) calls. |
+
+<Note>
+  The embedding model name is **not** an environment variable. Set it through **Settings → Models** in the UI (or the initialization wizard), using the Ollama model name as the `name` field for `source=local` models (e.g. `nomic-embed-text` with dimension 768, or `bge-m3` with dimension 1024).
+</Note>
+
+For declarative built-in models, copy `config/builtin_models.yaml.example` to `config/builtin_models.yaml`, uncomment the volume mount in `docker-compose.yml`, and reference your env vars using `${ENV_VAR}` placeholders in the YAML.
+
+---
+
+## E. Document Parsing
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DOCREADER_ADDR` | `docreader:50051` | Address the app uses to reach docreader (gRPC by default). |
+| `DOCREADER_TRANSPORT` | `grpc` | `grpc` or `http`. |
+| `DOCREADER_GRPC_MAX_WORKERS` | `4` | gRPC server worker thread count. |
+| `DOCREADER_GRPC_MAX_FILE_SIZE_MB` | `50` | gRPC message size limit. Should match `MAX_FILE_SIZE_MB`. |
+| `WEKNORA_DOCUMENT_PROCESS_TIMEOUT` | `2h` | Maximum time allowed for a single document processing task. Go duration format. |
+| `WEKNORA_DOCREADER_CALL_TIMEOUT` | `30m` | Single gRPC RPC timeout. Must be less than `WEKNORA_DOCUMENT_PROCESS_TIMEOUT`. |
+| `DOCREADER_PDF_FORCE_SCANNED` | `false` | Force all PDF pages to be treated as scanned images (slower, higher cost). |
+| `DOCREADER_PDF_RENDER_DPI` | `200` | Scanned page render resolution. |
+| `DOCREADER_PDF_JPEG_QUALITY` | `85` | JPEG quality for rendered page images (1–100). |
+| `DOCREADER_PDF_RENDER_MAX_EDGE` | `2000` | Maximum pixel length of the longer edge of a rendered page. |
+| `GRPC_TLS_ENABLED` | `false` | Enable TLS on the app↔docreader gRPC link. |
+| `GRPC_AUTH_TOKEN` | _(empty)_ | Per-RPC authentication token. Strongly recommended when `GRPC_TLS_ENABLED=true`. |
+
+---
+
+## F. Auth and Multi-Tenancy
+
+<Warning>
+  `JWT_SECRET` and `SYSTEM_AES_KEY` are the two most critical security variables. Use `openssl rand -hex 32` for `JWT_SECRET` and `openssl rand -hex 16` for `SYSTEM_AES_KEY`. Never commit `.env` to version control. Never change `SYSTEM_AES_KEY` after your first deployment—doing so permanently destroys all encrypted credentials.
+</Warning>
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `JWT_SECRET` | _(empty)_ | **Required.** JWT signing key. If empty, a random key is generated on each startup (users must re-login after every restart). Multi-replica deployments must share the same value. |
+| `SYSTEM_AES_KEY` | _(empty)_ | **Required.** AES-256 master key for encrypting API keys, model credentials, and vector DB passwords at rest. Must be exactly 32 bytes (use `openssl rand -hex 16`). |
+| `SYSTEM_SIGNING_KEY` | _(empty)_ | Signing key for embed sessions and presigned file URLs. Falls back to `SYSTEM_AES_KEY` if unset. Use `openssl rand -hex 32`. |
+| `DISABLE_REGISTRATION` | `false` | Set `true` to disable public self-registration (invite-only mode). |
+| `WEKNORA_AUTH_COMPLEX_PASSWORD_ENABLED` | `false` | Require passwords to contain uppercase, lowercase, digits, and special characters. |
+| `WEKNORA_AUTH_DEFAULT_TENANT_MODE` | `create_personal` | `create_personal` auto-creates a personal workspace on registration. `tenantless` sends new users to an onboarding flow where they must create or join a workspace. |
+| `WEKNORA_TENANT_ENABLE_RBAC` | `true` | Enforce workspace role-based access control. Set `false` for observation-only mode (role checks log but do not block). |
+| `WEKNORA_TENANT_SELF_SERVICE_CREATION_ENABLED` | `true` | Allow non-admin users to create new workspaces. |
+| `WEKNORA_TENANT_MAX_OWNED_PER_USER` | _(empty)_ | Maximum workspaces a non-admin user can create. `0` = code default; negative = no limit. |
+| `WEKNORA_TENANT_DEFAULT_STORAGE_QUOTA_GB` | `10` | Default storage quota for new workspaces (GB). |
+| `WEKNORA_AUDIT_RETENTION_DAYS` | `90` | Audit log retention in days. `0` disables auto-cleanup. |
+| `WEKNORA_BOOTSTRAP_SYSTEM_ADMIN_EMAIL` | _(empty)_ | Email of an existing user to promote to system admin on first startup (only activates if no system admin exists yet). |
+| `OIDC_AUTH_ENABLE` | `false` | Enable OIDC single sign-on. When `true`, also set `OIDC_AUTH_ISSUER_URL`, `OIDC_AUTH_CLIENT_ID`, `OIDC_AUTH_CLIENT_SECRET`, and `OIDC_AUTH_DISCOVERY_URL`. |
+
+---
+
+## G. Agent and Sandbox
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WEKNORA_SANDBOX_DOCKER_ENABLED` | `false` | Enable the local Docker sandbox backend. Mounting `docker.sock` gives the app root-equivalent access to the host—only enable on private single-node deployments. |
+| `WEKNORA_AGENT_LLM_TIMEOUT` | `120` | Per-LLM-call timeout for agent steps (seconds or Go duration). Increase for complex reasoning chains. |
+| `WEKNORA_AGENT_TOOL_APPROVAL_TIMEOUT` | `600` | How long to wait for human MCP tool approval (seconds). |
+| `WEKNORA_AGENT_TOOL_APPROVAL_FAIL_OPEN` | _(empty)_ | If set `true`, allow tool calls when approval times out instead of rejecting them (fail-open). Default is fail-close. |
+
+---
+
+## H. Integrations
+
+### SearXNG (self-hosted web search)
+
+Enable with `docker compose --profile searxng up -d`. In the UI, set the provider type to **SearXNG** and the Instance URL to `http://searxng:8080`.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SEARXNG_PORT` | `8888` | Host port for SearXNG. **Do not use 8080**—this collides with `APP_PORT` and causes login to return an HTML 404. |
+| `SEARXNG_BIND` | `127.0.0.1` | Bind address. The bundled config disables SearXNG's rate limiter; only expose to LAN/public after setting `SEARXNG_SECRET`. |
+| `SEARXNG_SECRET` | _(empty)_ | Secret key for image-proxy URL signing. Generate with `openssl rand -hex 32` before exposing publicly. |
+
+---
+
+## I. Observability (Langfuse)
+
+Langfuse tracing is automatically enabled when both `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LANGFUSE_PUBLIC_KEY` | `pk-lf-xxxxxxxx` | Langfuse project public key. |
+| `LANGFUSE_SECRET_KEY` | `sk-lf-xxxxxxxx` | Langfuse project secret key. |
+| `LANGFUSE_HOST` | `https://cloud.langfuse.com` | Langfuse server URL. For self-hosted: `http://langfuse-web:3000`. |
+| `LANGFUSE_SAMPLE_RATE` | `1.0` | Trace sampling rate (0.0–1.0). Reduce under high load. |
+| `LANGFUSE_FLUSH_AT` | _(empty)_ | Batch size before flushing traces. |
+| `LANGFUSE_FLUSH_INTERVAL` | _(empty)_ | Flush interval (Go duration). |
+
+To self-host Langfuse using WeKnora's existing PostgreSQL and Redis:
+
+```bash
+docker compose --profile langfuse up -d
+# Then: open http://localhost:3000, register, generate an API key
+# Update .env: LANGFUSE_HOST=http://langfuse-web:3000
+#              LANGFUSE_PUBLIC_KEY=<your key>
+#              LANGFUSE_SECRET_KEY=<your key>
+docker compose up -d app
+```
+
+---
+
+## J. Security and Tuning
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SSRF_WHITELIST` | _(empty)_ | Comma-separated list of hosts, domains (with `*` wildcard), IPv4/IPv6 addresses, or CIDR ranges that bypass SSRF validation. Shared by `app` and `docreader`. |
+| `SSRF_WHITELIST_EXTRA` | `searxng,qdrant,milvus,weaviate,doris-fe,doris-be,minio` | Additional SSRF whitelist entries (app only). Merged with `SSRF_WHITELIST`. Overriding this variable requires re-listing the default entries. |
+| `SSRF_DNS_WHITELIST_ONLY` | `false` | When `true`, only hosts in the whitelist are allowed outbound. All others are rejected before DNS lookup. Use for air-gapped or internal deployments. |
+| `WEKNORA_OUTBOUND_DIAL_TIMEOUT` | `5s` | Connection timeout for external endpoints (models, connectors). Increase for slow serverless endpoints. |
+| `CONCURRENCY_POOL_SIZE` | `5` | General-purpose goroutine pool size (used by embedding requests). Reduce if hitting provider rate limits. |
+| `WEKNORA_TRUSTED_PROXIES` | _(empty)_ | Comma-separated CIDR list of trusted reverse proxies for client IP extraction. Leave empty to trust loopback and private network ranges (covers the Nginx container). |
+
+<Tip>
+  Before enabling `SSRF_DNS_WHITELIST_ONLY=true`, add every outbound address your deployment uses to `SSRF_WHITELIST`: LLM API endpoints, vector database hosts, object storage endpoints, OIDC provider, Langfuse, MCP services, and Ollama (`localhost` if needed). Failure to whitelist an address will silently break the feature that depends on it.
+</Tip>
+
+## Configuration Priority Summary
+
+From lowest to highest precedence:
+
+1. `config/config.yaml` (shipped defaults)
+2. Prompt templates, built-in agents, and model catalog YAMLs
+3. **Environment variables** (`.env` / container `environment:`) ← this page
+4. Runtime system settings in the database (**Settings → System**)
+5. Per-tenant / per-knowledge-base config stored in the database (retrieval, chunking, etc.)

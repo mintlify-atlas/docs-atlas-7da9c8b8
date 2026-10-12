@@ -1,0 +1,329 @@
+---
+title: "WeKnora CLI: Terminal Client for the Full API"
+sidebarTitle: "CLI"
+description: "Install the weknora CLI, authenticate with a profile or env vars, and manage knowledge bases, documents, agents, and chat from your terminal or CI pipeline."
+---
+
+The `weknora` CLI is a full-featured terminal client for every WeKnora API endpoint. It is designed to be AI-agent-first: all output defaults to a symmetric JSON envelope, errors go to stderr with typed error codes, and every destructive command requires explicit confirmation. Human operators can pass `--format text` for readable output. The CLI also doubles as an MCP server when run with `weknora mcp serve`.
+
+Source lives in `cli/` as an independent Go module (`github.com/Tencent/WeKnora/cli`). Requires **Go 1.26+** to build.
+
+## Install from Source
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/Tencent/WeKnora.git
+    cd WeKnora/cli
+    ```
+  </Step>
+  <Step title="Build and install">
+    ```bash
+    go build -o weknora .
+    sudo mv weknora /usr/local/bin/
+    ```
+    Alternatively, build with version metadata using the Makefile:
+    ```bash
+    make build        # produces ./bin/weknora with git version injected
+    ```
+  </Step>
+  <Step title="Add your first profile">
+    ```bash
+    weknora profile add prod --host https://kb.example.com --use
+    ```
+    This registers your WeKnora server as a named profile called `prod` and activates it. No network calls are made yet.
+  </Step>
+  <Step title="Authenticate">
+    ```bash
+    weknora auth login
+    # Enter email and password at the prompts
+    ```
+    For CI or non-interactive use, pipe an API key:
+    ```bash
+    echo "$WEKNORA_API_KEY" | weknora auth login --with-token
+    ```
+  </Step>
+  <Step title="Verify the connection">
+    ```bash
+    weknora doctor
+    weknora kb list
+    ```
+    `doctor` runs four self-checks (base URL reachability, auth, server version compatibility, credential storage). `kb list` confirms the connection and credentials are working.
+  </Step>
+</Steps>
+
+## All Top-Level Commands
+
+```
+weknora --help
+
+Available Commands:
+  agent       Manage custom agents (CRUD + status/check)
+  api         Make a raw API request to the WeKnora server
+  auth        Manage authentication credentials and profiles
+  chat        Ask a streaming RAG question against a knowledge base
+  chunk       Manage document chunks (RAG retrieval debug)
+  completion  Generate the autocompletion script for the specified shell
+  config      Inspect the CLI's resolved configuration
+  doc         Manage documents in a knowledge base
+  doctor      Run 4 self-checks: base URL, auth, server version, credential storage
+  exit-codes  Exit code matrix and the agent action for each
+  help        Help about any command
+  kb          Manage knowledge bases
+  link        Bind the current directory to a knowledge base
+  mcp         Run weknora as a Model Context Protocol server
+  message     Inspect and manage messages inside chat sessions
+  model       Manage models (list / view / create / update / delete)
+  profile     Manage CLI profiles (named connection targets)
+  schema      Machine-readable contract for a command (or the whole surface)
+  search      Search across chunks, knowledge bases, documents, or sessions
+  session     Manage chat sessions
+  skills      List and install the bundled Agent Skills
+  unlink      Remove the directory's knowledge-base binding
+  version     Show CLI build metadata
+```
+
+## Common Usage Examples
+
+### Managing Knowledge Bases and Documents
+
+```bash
+# List all visible knowledge bases
+weknora kb list
+
+# Create a knowledge base
+weknora kb create docs \
+  --embedding-model text-embedding-3 \
+  --chat-model gpt-4o
+
+# Bind the current directory to a KB (saves to .weknora/project.yaml)
+weknora link --kb my-kb
+
+# Upload a document (KB resolved from the .weknora/project.yaml link)
+weknora doc upload notes.md
+
+# Upload a whole directory of PDFs
+weknora doc upload ./papers --recursive --glob '*.pdf'
+
+# Wait for a document to finish parsing before continuing
+weknora doc wait doc_abc --timeout 5m
+
+# Search for chunks
+weknora search chunks "rate limiting design" --kb docs --limit 5
+```
+
+### Streaming Chat
+
+```bash
+# Ask a question against a knowledge base
+weknora chat "summarize the design doc" --kb my-kb
+
+# Ask via a custom Agent
+weknora session ask "what's our Q4 plan?" --agent agt_123
+
+# Continue an existing session
+weknora chat "elaborate on the second point" --session sess_abc
+
+# Stream raw SSE events (for pipeline integration)
+weknora chat "explain RRF" --kb docs --format ndjson
+```
+
+### MCP Server Mode
+
+Run the CLI as a stdio MCP server to expose a curated read-only tool surface to any MCP-compatible client:
+
+```bash
+weknora mcp serve
+```
+
+Register in your MCP client's config file:
+
+```json
+{
+  "mcpServers": {
+    "weknora": {
+      "command": "weknora",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+For named profiles (e.g., in Claude Desktop):
+
+```json
+{
+  "mcpServers": {
+    "weknora": {
+      "command": "weknora",
+      "args": ["--profile", "prod", "mcp", "serve"]
+    }
+  }
+}
+```
+
+The MCP server provides 10 read-only tools: `kb_list`, `kb_view`, `doc_list`, `doc_view`, `doc_download`, `search_chunks`, `chunk_list`, `agent_list`, `chat`, and `session_ask`.
+
+## Headless and CI Usage
+
+For environments without interactive login (CI pipelines, containers, AI agents), use environment variables to avoid config files and OS keyrings entirely:
+
+```bash
+export WEKNORA_API_KEY="sk-..."
+export WEKNORA_HOST="https://kb.example.com"
+
+# All commands now work without profile setup or auth login
+weknora kb list
+weknora doc upload ./report.pdf --kb docs
+weknora chat "summarize this quarter" --kb docs
+```
+
+| Variable | Purpose |
+|---|---|
+| `WEKNORA_API_KEY` | API key (or use `WEKNORA_TOKEN` for a JWT) |
+| `WEKNORA_HOST` | Server base URL |
+| `WEKNORA_PROFILE` | Override the active profile |
+| `WEKNORA_KB_ID` | Explicitly set the knowledge base ID |
+| `WEKNORA_FORMAT` | Default output format (`text` / `json` / `ndjson`) |
+| `WEKNORA_LOG_LEVEL` | SDK log verbosity (`error` / `warn` / `info` / `debug`) |
+
+## JSON Envelope Output
+
+All commands default to `--format json` regardless of whether stdout is a TTY. This makes `weknora kb list | jq` work without flags.
+
+**Success response (stdout):**
+
+```json
+{
+  "ok": true,
+  "data": [{"id": "kb_abc", "name": "Docs"}],
+  "meta": {"count": 1, "total_count": 1, "has_more": false},
+  "profile": "prod"
+}
+```
+
+- Use `--jq '.data[].id'` to project fields. The `.data` root is always the payload.
+- List commands include `meta.count`, `meta.total_count`, and `meta.has_more`.
+- Batch operations include `meta.successes`, `meta.failures`, and `meta.status` (`success` / `partial` / `error`).
+- Dry-run responses include `meta.dry_run: true` and `meta.plan`.
+
+**Error response (stderr, stdout stays empty):**
+
+```json
+{
+  "ok": false,
+  "error": {
+    "type": "auth.unauthenticated",
+    "message": "fetch current user: HTTP error 401",
+    "exit_code": 3,
+    "hint": "run `weknora auth login`",
+    "retry_argv": ["weknora", "auth", "login"],
+    "retryable": false
+  }
+}
+```
+
+Use `--format text` for human-readable output when running interactively:
+
+```bash
+weknora kb list --format text
+weknora chat "explain this" --format text
+```
+
+## Exit Codes
+
+```bash
+weknora exit-codes   # machine-readable JSON matrix
+weknora help exit-codes  # human-readable table
+```
+
+| Code | Meaning | Recommended action |
+|---|---|---|
+| `0` | Success | Continue |
+| `1` | Typed local error / operation failed / unclassified | Read stderr, decide retry or abort |
+| `2` | Flag / argument parse error | Check `weknora <cmd> --help` |
+| `3` | Auth / authorization failure | Run `weknora auth login` and retry |
+| `4` | Resource not found | Verify the resource ID |
+| `5` | Invalid input (typed validation error) | Adjust args and retry |
+| `6` | Rate limited | Back off and retry |
+| `7` | Server or network error | Transient — retry with backoff |
+| `10` | **Destructive write needs confirmation** | Ask the human; add `-y` only after explicit approval |
+| `124` | Timeout (e.g., `doc wait --timeout` reached) | Increase `--timeout` or check the underlying task |
+| `130` | Cancelled by SIGINT/SIGTERM | Stop, do not retry |
+
+<Warning>
+Exit code `10` is a hard guard against unintended destructive writes. Never auto-add `-y` without the user's explicit approval. Commands that trigger exit 10 include `kb delete`, `doc delete`, `agent delete`, `session delete`, `chunk delete`, and raw API calls with `-X DELETE`.
+</Warning>
+
+## Global Flags
+
+| Flag | Short | Description |
+|---|---|---|
+| `--format` | | `text` \| `json` \| `ndjson` — default `json` |
+| `--jq` | `-q` | jq expression to filter the JSON output |
+| `--profile` | | Override the active profile for this invocation only |
+| `--log-level` | | SDK log level: `error` / `warn` / `info` / `debug` |
+| `--yes` | `-y` | Skip confirmation prompts on destructive operations |
+| `--dry-run` | | Preview the action without executing it (most mutation commands) |
+| `--version` | | Print version |
+
+## Dry-Run Mode
+
+Add `--dry-run` to any mutation command to preview without executing:
+
+```bash
+weknora kb create test-kb --dry-run
+# {"ok":true,"meta":{"dry_run":true,"plan":{"action":"kb.create","args":{"name":"test-kb"}}}}
+```
+
+Dry-run is offline — no network calls, no file I/O, no credential touches.
+
+## Directory Binding (`link` / `unlink`)
+
+Bind a directory to a knowledge base to avoid repeating `--kb` in every command:
+
+```bash
+# Bind current directory (stored in .weknora/project.yaml)
+weknora link --kb engineering-docs
+
+# Now these resolve --kb automatically
+weknora doc upload ./spec.md
+weknora chat "what are the design constraints?"
+weknora search chunks "authentication flow"
+
+# Remove the binding
+weknora unlink
+```
+
+The CLI searches upward through parent directories (up to 64 levels) to find a `.weknora/project.yaml` file.
+
+## Machine Introspection
+
+```bash
+# List all commands with their purpose
+weknora schema
+
+# Get the full contract for a specific command
+weknora schema doc upload
+# Returns: used_for, required_flags, examples, output shape, risk level
+
+# Get agent-optimized help for a command
+WEKNORA_AGENT_HELP=1 weknora doc upload --help
+```
+
+## Bundled Agent Skills
+
+The CLI ships with embedded Agent Skills that teach an AI agent to use WeKnora correctly:
+
+```bash
+# Install skills to the default agent skills directory
+weknora skills install
+
+# Install to a custom directory
+weknora skills install --dir ~/.claude/skills --force
+
+# Preview what would be installed
+weknora skills list
+```
+
+Skills are embedded in the binary — no source checkout needed at install time.

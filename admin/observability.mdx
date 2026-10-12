@@ -1,0 +1,218 @@
+---
+title: "Observability: Tracing, Metrics, and Monitoring"
+sidebarTitle: "Observability"
+description: "Langfuse tracing for every agent step and token, document-parsing timelines, a live task-queue dashboard, and LLM debug logging for raw call inspection."
+---
+
+WeKnora emits structured observability data across three dimensions: distributed traces (via Langfuse / LiteFuse), an append-only audit log, and a real-time task-queue dashboard. Together they let you answer "what happened in that chat?" without digging through raw server logs.
+
+## Overview
+
+| Goal | Where to look |
+|---|---|
+| Full call chain for a chat or parse — LLM calls, tokens, retrieval | Langfuse UI (`trace name = POST /api/v1/agent-chat` or `asynq.document:process`) |
+| Who changed what KB / member / setting | **Settings → Audit Log** or `GET /api/v1/tenants/:id/audit-log` |
+| Background tasks stuck, failing, or retrying | **Settings → Runtime** (task-queue dashboard) |
+| Service liveness | `GET /health` → `{"status":"ok"}` |
+| Correlate log lines for one request | Use the `X-Request-ID` response header to grep application logs |
+| Raw LLM prompts and completions | Enable `LLM_DEBUG_LOG` — see per-request files in `llm_debug/` |
+
+## Langfuse Integration
+
+WeKnora uses the OpenTelemetry Go SDK to export traces to any Langfuse v3+ or LiteFuse endpoint via OTLP/HTTP. Tracing is **off by default**; setting `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` automatically enables it.
+
+### Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `LANGFUSE_ENABLED` | Auto (when keys present) | Master switch. Mirrors the Python SDK convention. |
+| `LANGFUSE_HOST` | `https://cloud.langfuse.com` | Langfuse or self-hosted LiteFuse base URL |
+| `LANGFUSE_PUBLIC_KEY` | — | Basic Auth project public key |
+| `LANGFUSE_SECRET_KEY` | — | Basic Auth project secret key |
+| `LANGFUSE_RELEASE` | — | Attached to every trace for UI filtering |
+| `LANGFUSE_ENVIRONMENT` | — | Attached to every trace (e.g. `production`, `staging`) |
+| `LANGFUSE_FLUSH_AT` | `15` | Max batch size before exporting |
+| `LANGFUSE_FLUSH_INTERVAL` | `3s` | Max interval between exports |
+| `LANGFUSE_QUEUE_SIZE` | `2048` | In-memory buffer cap (prevents unbounded growth if endpoint is down) |
+| `LANGFUSE_REQUEST_TIMEOUT` | `10s` | Per-ingestion HTTP timeout |
+| `LANGFUSE_SAMPLE_RATE` | `1.0` | Sampling rate 0–1 (`TraceIDRatioBased`) |
+| `LANGFUSE_DEBUG` | `false` | Log details on batch-send errors |
+
+### Self-Hosted Langfuse
+
+WeKnora's Docker Compose configuration ships with an optional Langfuse profile. Start it alongside the main stack:
+
+```bash
+docker compose --profile langfuse up -d
+```
+
+Then point the app at the local instance:
+
+```bash
+LANGFUSE_HOST=http://langfuse:3000
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+```
+
+<Note>
+The Langfuse OTLP exporter uses its own HTTP client and is **not** subject to the SSRF whitelist (`SSRF_DNS_WHITELIST_ONLY`), even when that protection is enabled for other outbound calls.
+</Note>
+
+## What Gets Traced
+
+WeKnora instruments all major request paths. A trace named `POST /api/v1/agent-chat` contains the following span tree:
+
+```
+Trace: POST /api/v1/agent-chat
+├── Span: agent.execute
+│   ├── Generation: embedding  (query vectorization)
+│   ├── Generation: rerank     (result re-ranking)
+│   └── Generation: chat       (LLM planning / answer)
+└── InjectTracing → asynq payload
+    └── Span: asynq.document:process  (background parser)
+        └── Generation: vlm / embedding / chat
+```
+
+### Instrumented Points
+
+| Instrumentation point | Source | What it emits |
+|---|---|---|
+| HTTP entry | `langfuse.GinMiddleware` | Root Trace for whitelisted paths (`knowledge-chat`, `agent-chat`, `knowledge-search`, ingestion, FAQ import, wiki, evaluation, initialization). Records `http.method`, `http.path`, response status and size. Extracts upstream W3C `traceparent`. |
+| Async worker (asynq) | `langfuse.AsynqMiddleware` | Resumes the trace from `traceparent` embedded in the task payload, or opens a new `asynq.<task_type>` trace. Wraps a Span with `task_id`, `queue`, `retry`, `max_retry`, `payload_bytes`. |
+| Every model call | `langfuse_wrapper.go` (chat / embedding / rerank / VLM / ASR) | One Generation per call: model name, inputs, parameters, output, token usage, errors. |
+| Retrieval and re-ranking | `retrieval_obs.go` | `SummarizeRetrieveOutput` compresses top-25 results to rank / chunk_id / score / 160-char preview. Separate diagnostic spans for each pipeline stage. |
+| Agent execution | `agent/engine.go`, `act.go` | `agent.execute` Span, cloned via `logger.CloneContext` to stay within the HTTP root trace tree. |
+
+### Diagnostic Spans (Retrieval Pipeline)
+
+These spans record statistics on existing results — they do **not** issue additional model calls:
+
+| Span name | Meaning |
+|---|---|
+| `diagnostics.retrieval.vector.result_pool.initial` | Initial vector-search result pool |
+| `diagnostics.retrieval.keywords.result_pool.initial` | Initial keyword-search result pool |
+| `diagnostics.retrieval.<vector/keywords>.result_pool.refill` | Refill pool (only when a refill search actually happened) |
+| `diagnostics.retrieval.<vector/keywords>.filter_decision` | Filter evaluation: kept vs. dropped |
+| `diagnostics.retrieval.fusion.candidate_selection` | Post-fusion truncation |
+| `diagnostics.rerank.selection` | Re-ranking: kept vs. dropped |
+
+### Token Usage
+
+Each Generation carries a `TokenUsage` struct:
+
+- `prompt_tokens`, `completion_tokens`, `total_tokens` — totals
+- `cached_tokens` — alias for `cache_read_tokens` (compatibility)
+- `cache_read_tokens`, `cache_write_tokens`, `cache_miss_tokens` — input token breakdown (do **not** add these to `prompt_tokens`)
+
+`cache_reported` / `cache_status` distinguish `hit`, `miss`, `unreported`, and `unsupported`. An unreported status does not mean a cache miss.
+
+## Document Parsing Timeline
+
+Every uploaded document goes through an asynchronous parse pipeline. You can watch individual document processing in the Langfuse trace for `asynq.document:process`. Inside that trace you will find:
+
+- Time spent in each parse stage (OCR, chunking, embedding)
+- VLM calls for multimodal extraction
+- Embedding model calls for vectorization
+- Any failures and their error text
+
+The WeKnora UI also shows a simplified parse status per document (pending / processing / completed / failed) in the knowledge base document list.
+
+## Task-Queue Dashboard
+
+WeKnora uses [asynq](https://github.com/hibiken/asynq) for all background work. The built-in dashboard is accessible to system admins at **Settings → Runtime**.
+
+<CardGroup cols={2}>
+  <Card title="Queue Stats" icon="chart-bar">
+    Live view of enqueued, active, scheduled, retry, and archived (dead-letter) counts per queue.
+  </Card>
+  <Card title="Task Inspection" icon="magnifying-glass">
+    Drill into individual tasks: payload preview, last error, retry count, next-scheduled time.
+  </Card>
+  <Card title="Task Actions" icon="play">
+    Retry, run-now, archive, or delete individual tasks directly from the UI.
+  </Card>
+  <Card title="Bulk Archive Purge" icon="trash">
+    Clear all archived (DLQ) tasks for a queue in one action.
+  </Card>
+</CardGroup>
+
+<Note>
+In Lite mode (no Redis), the task-queue dashboard returns `available: false`. A Redis instance is required for full queue visibility.
+</Note>
+
+### Worker Pool Sizes
+
+Each queue has a configurable worker pool. These settings can be changed at runtime from **Settings → System Settings** (system admin only) without restarting the server:
+
+| Setting key | Default | Queue |
+|---|---|---|
+| `asynq.core_concurrency` | varies | Core pipeline tasks |
+| `asynq.postprocess_concurrency` | varies | Post-processing (summaries, auto-tags) |
+| `asynq.enrichment_concurrency` | varies | Enrichment tasks |
+| `asynq.maintenance_concurrency` | varies | Maintenance (retention, cleanup) |
+| `asynq.shared_concurrency` | varies | Shared / general tasks |
+| `asynq.wiki_concurrency` | varies | Wiki synthesis tasks |
+
+Changes take effect when the worker pool is re-assembled, without dropping in-flight tasks.
+
+### Dead-Letter Queue Management
+
+Failed tasks that have exhausted all retries land in the `task_dead_letters` database table (archived state in asynq). From the runtime dashboard you can:
+
+- Inspect the `last_error` field to understand the failure
+- Retry individual tasks or bulk-retry all failed tasks in a queue
+- Purge archived tasks to reclaim space
+
+The audit log records all queue operations under the `system.queue_task_*` action namespace.
+
+## LLM Debug Log
+
+For deep debugging of raw model requests and responses, enable per-request LLM debug logging:
+
+```bash
+LLM_DEBUG_LOG=true          # enable, write to ./llm_debug/
+LLM_DEBUG_LOG=/var/log/llm  # enable, write to a custom directory
+```
+
+When enabled, **every** model call (Chat, Streaming Chat, Embedding, Rerank, VLM, ASR) appends its full input messages, tool calls, output, and errors to a file named `<request_id>.log`. All calls within the same HTTP request share a single file, making it easy to reconstruct the full model interaction for one conversation turn.
+
+<Warning>
+LLM debug logs contain the complete prompt and response content, which may include sensitive data. Restrict file permissions and rotate / purge frequently. Files older than 7 days are deleted automatically on server startup.
+</Warning>
+
+## Application Logs
+
+WeKnora writes structured logs to stdout. Configure log behavior with environment variables:
+
+| Variable | Values | Default |
+|---|---|---|
+| `LOG_LEVEL` | `debug` / `info` / `warn` / `error` / `fatal` | `debug` |
+| `LOG_PATH` | filesystem path | — (stdout only) |
+| `LOG_FORMAT` | template string | built-in |
+
+When `LOG_PATH` is set, logs are also written to a file managed by lumberjack: 50 MB max size, 3 backups, 28-day retention, gzip-compressed.
+
+Every request gets a unique `X-Request-ID` (generated if not supplied by the caller). The middleware injects it into every log line for that request and returns it in the response header. grep server logs by this ID to reconstruct a full request timeline even when distributed across multiple log lines.
+
+## Health Check
+
+```bash
+curl https://kb.example.com/health
+# {"status":"ok"}
+```
+
+`GET /health` is a lightweight liveness probe (200 OK). It does not check database or Redis connectivity. Use it for container/LB health checks. Langfuse sampling and request logging both exclude this path to keep probe noise out of observability data.
+
+## Implementation Reference
+
+| Capability | Source path |
+|---|---|
+| Application logs | `internal/logger/logger.go` |
+| LLM debug log | `internal/logger/llm_logger.go` |
+| Request log / RequestID middleware | `internal/middleware/logger.go` |
+| Langfuse tracing (OTel SDK) | `internal/tracing/langfuse/` |
+| Cross-process trace carrier | `internal/types/tracing.go` |
+| Audit log handler / service | `internal/handler/audit_log.go`, `internal/application/service/audit_log.go` |
+| Audit retention | `internal/application/service/audit_log_retention.go` |
+| Audit actions / model | `internal/types/audit_log.go` |
+| Health check | `internal/router/router.go` |

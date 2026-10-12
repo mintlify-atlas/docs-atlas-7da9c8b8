@@ -1,0 +1,294 @@
+---
+title: "Models and Vector Stores API Reference"
+sidebarTitle: "Models"
+description: "Configure chat, embedding, rerank, VLM, and ASR models; manage credentials separately; and administer vector store and storage backend bindings."
+---
+
+The Models API manages every LLM and infrastructure component that WeKnora uses internally: conversation models, embedding models for vector indexing, rerank models for result quality, vision-language models (VLM) for image processing, and ASR models for audio transcription. Model credentials (API keys) are stored separately and never returned in list or detail responses.
+
+**Permission quick reference:** Read: Viewer+. Create / update / delete: Admin+ (built-in models require SystemAdmin). API Keys need `manage_models` or full-access.
+
+---
+
+## Models
+
+### List Models
+
+```bash
+curl $BASE/api/v1/models -H "Authorization: Bearer $TOKEN"
+```
+
+### Get Model Providers Catalog
+
+Returns provider metadata including icons, default URLs, extra configuration fields, and the built-in model catalog.
+
+```bash
+curl "$BASE/api/v1/models/providers?model_type=chat" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+<ParamField query="model_type" type="string">
+  Filter by model type: `chat`, `embedding`, `rerank`, `vllm`, or `asr`. Returns all types if omitted.
+</ParamField>
+
+### Create a Model
+
+`POST /api/v1/models`
+
+<ParamField body="name" type="string" required>
+  Internal model name used as the identifier.
+</ParamField>
+
+<ParamField body="display_name" type="string">
+  Human-readable display name shown in the UI.
+</ParamField>
+
+<ParamField body="type" type="string" required>
+  Model type: `KnowledgeQA` (chat), `Embedding`, `Rerank`, `VLLM`, or `ASR`. These values are stored as-is; do not use UI shorthand like `chat`.
+</ParamField>
+
+<ParamField body="source" type="string" required>
+  Model source: `local` (Ollama-hosted) or `remote` (API-based).
+</ParamField>
+
+<ParamField body="description" type="string">
+  Optional notes about this model configuration.
+</ParamField>
+
+<ParamField body="parameters" type="object" required>
+  <Expandable title="Connection parameters">
+    <ParamField body="provider" type="string">
+      Provider ID from the catalog (e.g., `openai`, `deepseek`, `azure`, `ollama`).
+    </ParamField>
+    <ParamField body="base_url" type="string">
+      API base URL. Validated against SSRF protections.
+    </ParamField>
+    <ParamField body="api_key" type="string">
+      API key. Only accepted during creation; use the credentials endpoint for subsequent updates.
+    </ParamField>
+    <ParamField body="extra_config" type="object">
+      Provider-specific extra fields declared in the catalog (e.g., `api_version` for Azure).
+    </ParamField>
+    <ParamField body="context_window" type="integer">
+      Override the model's context window size.
+    </ParamField>
+    <ParamField body="spec" type="object">
+      Single-row catalog override for capabilities and compatibility flags.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+```bash
+curl -X POST $BASE/api/v1/models \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "gpt-4o-mini",
+    "display_name": "GPT-4o Mini",
+    "type": "KnowledgeQA",
+    "source": "remote",
+    "parameters": {
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "sk-..."
+    }
+  }'
+```
+
+**Response:** `201 {"success":true,"data":{ModelResponse}}`
+
+<ResponseField name="id" type="string">Model ID.</ResponseField>
+<ResponseField name="name" type="string">Model name.</ResponseField>
+<ResponseField name="type" type="string">Model type.</ResponseField>
+<ResponseField name="is_default" type="boolean">Whether this is the workspace default model for its type.</ResponseField>
+<ResponseField name="is_builtin" type="boolean">System-provided models cannot be deleted by workspace admins.</ResponseField>
+<ResponseField name="status" type="string">Availability status.</ResponseField>
+<ResponseField name="credentials" type="object">Shows `{"api_key":{"configured":true}}` — never contains the actual key.</ResponseField>
+<ResponseField name="capabilities" type="object">Resolved capabilities: reasoning support, context window, max output tokens, thinking levels.</ResponseField>
+
+### Update and Delete a Model
+
+```bash
+# Update display name
+curl -X PUT $BASE/api/v1/models/m-1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"display_name":"GPT-4o Mini (Prod)"}'
+
+# Delete
+curl -X DELETE $BASE/api/v1/models/m-1 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+<Warning>
+  Deleting a model that is referenced by knowledge bases, agents, or long-term memory returns HTTP 400 with error code 2300. The response includes a `details` object listing every referencing resource.
+</Warning>
+
+### Update Model Credentials
+
+Credentials are managed separately from model configuration. The API key is never returned after being stored.
+
+```bash
+curl -X PUT $BASE/api/v1/models/m-1/credentials \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"api_key":"sk-new-key"}'
+```
+
+To remove a credential:
+
+```bash
+curl -X DELETE $BASE/api/v1/models/m-1/credentials/api_key \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Test a Model Connection
+
+```bash
+# Test LLM connectivity
+curl -X POST $BASE/api/v1/initialization/remote/check \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "modelName": "gpt-4o-mini",
+    "baseUrl": "https://api.openai.com/v1",
+    "apiKey": "sk-...",
+    "modelId": "m-1"
+  }'
+
+# Test embedding model
+curl -X POST $BASE/api/v1/initialization/embedding/test \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"modelName":"text-embedding-3-small","modelId":"m-2"}'
+
+# Test rerank model
+curl -X POST $BASE/api/v1/initialization/rerank/check \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"modelName":"bge-reranker-v2-m3","modelId":"m-3"}'
+```
+
+**Test response fields:**
+<ResponseField name="available" type="boolean">Whether the model responded successfully.</ResponseField>
+<ResponseField name="message" type="string">Human-readable status or error message.</ResponseField>
+<ResponseField name="dimension" type="integer">Embedding vector dimension (embedding tests only).</ResponseField>
+
+---
+
+## Vector Stores
+
+Vector stores are external vector database instances that knowledge bases can be bound to instead of the default built-in store.
+
+**Permission:** Admin+ (API Key: `manage_vector_stores` or full-access).
+
+```bash
+# List
+curl $BASE/api/v1/vector-stores -H "Authorization: Bearer $TOKEN"
+
+# Create
+curl -X POST $BASE/api/v1/vector-stores \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "Qdrant Cluster",
+    "provider": "qdrant",
+    "config": {
+      "host": "qdrant.internal",
+      "port": 6333,
+      "api_key": "..."
+    }
+  }'
+
+# Update
+curl -X PUT $BASE/api/v1/vector-stores/vs-1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Qdrant Cluster (Updated)"}'
+
+# Delete
+curl -X DELETE $BASE/api/v1/vector-stores/vs-1 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+## Storage Backends
+
+Storage backends define where uploaded files and generated assets are stored (local disk, MinIO, S3, COS, TOS, OBS, etc.).
+
+**Permission:** Admin+ (API Key: `manage_storage_backends` or full-access).
+
+```bash
+# List
+curl $BASE/api/v1/storage-backends -H "Authorization: Bearer $TOKEN"
+
+# Create MinIO backend
+curl -X POST $BASE/api/v1/storage-backends \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "Primary MinIO",
+    "provider": "minio",
+    "config": {
+      "endpoint": "minio:9000",
+      "bucket": "weknora",
+      "access_key": "minioadmin",
+      "secret_key": "minioadmin",
+      "use_ssl": false
+    }
+  }'
+
+# Update
+curl -X PUT $BASE/api/v1/storage-backends/sb-1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Primary MinIO (Updated)"}'
+
+# Delete
+curl -X DELETE $BASE/api/v1/storage-backends/sb-1 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Test a Storage Configuration
+
+Before binding a storage backend, verify connectivity:
+
+```bash
+curl -X POST $BASE/api/v1/system/storage-engine-check \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "provider": "minio",
+    "minio": {
+      "endpoint": "minio:9000",
+      "bucket": "weknora",
+      "access_key": "minioadmin",
+      "secret_key": "minioadmin"
+    }
+  }'
+```
+
+---
+
+## Ollama (Local Models)
+
+If you have an Ollama instance available, WeKnora can discover and download models from it.
+
+```bash
+# Check Ollama availability
+curl $BASE/api/v1/initialization/ollama/status -H "Authorization: Bearer $TOKEN"
+
+# List available local models
+curl $BASE/api/v1/initialization/ollama/models -H "Authorization: Bearer $TOKEN"
+
+# Download a model
+curl -X POST $BASE/api/v1/initialization/ollama/models/download \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"modelName":"llama3.2"}'
+
+# Poll download progress
+curl $BASE/api/v1/initialization/ollama/download/progress/task-1 \
+  -H "Authorization: Bearer $TOKEN"
+```

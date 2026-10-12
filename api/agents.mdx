@@ -1,0 +1,326 @@
+---
+title: "Agents and MCP Endpoints API Reference"
+sidebarTitle: "Agents"
+description: "CRUD for custom chat agents, external MCP service integration, and the built-in MCP Server endpoint that exposes workspace tools to external MCP clients."
+---
+
+WeKnora has three related but distinct agent concepts. **Custom agents** are configurable chat personalities that pair a prompt, a model, and a set of knowledge bases. **MCP services** are external tool servers (GitHub, Jira, etc.) connected over the MCP protocol that agents can call. **MCP endpoints** are outbound interfaces that expose your workspace's tools to *external* MCP clients such as Claude Desktop or Cursor.
+
+**Permission quick reference:**
+- Agents — read: Viewer+ (API Key: `read_agents`, `manage_agents`, `chat`, or full); write: Creator or Admin+ (API Key: `manage_agents` or full).
+- MCP services — read: Viewer+; write/test: Admin+ (API Key: `manage_mcp_services` or full).
+- MCP endpoints — read: Viewer+; write: Admin+ (API Key: `manage_channels` or full).
+
+---
+
+## Custom Agents
+
+### Create an Agent
+
+`POST /api/v1/agents`
+
+<ParamField body="name" type="string" required>
+  Agent display name.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Human-readable description of the agent's purpose.
+</ParamField>
+
+<ParamField body="avatar" type="string">
+  Emoji or avatar URL.
+</ParamField>
+
+<ParamField body="config" type="object">
+  <Expandable title="Agent configuration fields">
+    <ParamField body="agent_mode" type="string">
+      `quick-answer` for direct KB Q&A, or `smart-reasoning` for multi-step tool-using agents.
+    </ParamField>
+    <ParamField body="agent_type" type="string">
+      Preset type: `rag-qa`, `wiki-qa`, `hybrid-rag-wiki`, `data-analysis`, or `custom`.
+    </ParamField>
+    <ParamField body="model_id" type="string">
+      Chat model ID to use.
+    </ParamField>
+    <ParamField body="system_prompt" type="string">
+      System prompt text (supports placeholder variables).
+    </ParamField>
+    <ParamField body="temperature" type="number">
+      Sampling temperature, 0–2. Invalid values return error code 2103.
+    </ParamField>
+    <ParamField body="max_iterations" type="integer">
+      Maximum agent reasoning iterations, 1–20. Invalid values return error code 2102.
+    </ParamField>
+    <ParamField body="allowed_tools" type="array">
+      Tools the agent may call. Smart-reasoning agents require at least one; omitting returns error code 2101.
+    </ParamField>
+    <ParamField body="kb_selection_mode" type="string">
+      `all` (all workspace KBs), `selected` (explicit list), or `none`.
+    </ParamField>
+    <ParamField body="knowledge_bases" type="array">
+      KB IDs when `kb_selection_mode` is `selected`.
+    </ParamField>
+    <ParamField body="web_search_enabled" type="boolean">
+      Allow the agent to perform live web searches.
+    </ParamField>
+    <ParamField body="mcp_selection_mode" type="string">
+      `all`, `selected`, or `none` for MCP service access.
+    </ParamField>
+    <ParamField body="mcp_services" type="array">
+      MCP service IDs when `mcp_selection_mode` is `selected`.
+    </ParamField>
+    <ParamField body="question_suggestions" type="object">
+      Configuration for suggested follow-up questions.
+    </ParamField>
+    <ParamField body="memory_enabled" type="boolean">
+      `null` inherits workspace setting; `false` disables long-term memory for this agent.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+```bash
+curl -X POST $BASE/api/v1/agents \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "Support Assistant",
+    "config": {
+      "agent_mode": "quick-answer",
+      "model_id": "m-gpt4o",
+      "system_prompt": "You are a helpful support agent. Answer based only on the provided knowledge base.",
+      "kb_selection_mode": "selected",
+      "knowledge_bases": ["kb-1"]
+    }
+  }'
+```
+
+**Response:** `201 {"success":true,"data":{Agent}}`
+
+<ResponseField name="id" type="string">Agent ID.</ResponseField>
+<ResponseField name="name" type="string">Agent name.</ResponseField>
+<ResponseField name="is_builtin" type="boolean">Whether this is a system-provided built-in agent.</ResponseField>
+<ResponseField name="created_by" type="string">Creator user ID.</ResponseField>
+<ResponseField name="config" type="object">Full agent configuration.</ResponseField>
+
+### List Agents
+
+```bash
+curl $BASE/api/v1/agents -H "X-API-Key: $API_KEY"
+```
+
+Pass `creator=mine` to show only your own agents.
+
+### Get / Update / Delete an Agent
+
+```bash
+# Get
+curl $BASE/api/v1/agents/agent-1 -H "Authorization: Bearer $TOKEN"
+
+# Update (all fields optional)
+curl -X PUT $BASE/api/v1/agents/agent-1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"description":"Updated description","config":{"temperature":0.3}}'
+
+# Delete
+curl -X DELETE $BASE/api/v1/agents/agent-1 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Copy an Agent
+
+```bash
+curl -X POST $BASE/api/v1/agents/agent-1/copy \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+## MCP Services (External Tool Servers)
+
+MCP services are external servers that expose tools to your agents. WeKnora connects to them over SSE or HTTP Streamable transport.
+
+### Create an MCP Service
+
+`POST /api/v1/mcp-services`
+
+<ParamField body="name" type="string" required>Service name.</ParamField>
+<ParamField body="transport_type" type="string" required>
+  `sse` or `http-streamable`. The `stdio` type is blocked for security reasons.
+</ParamField>
+<ParamField body="url" type="string">Service endpoint URL.</ParamField>
+<ParamField body="enabled" type="boolean" default="true">Whether the service is active.</ParamField>
+<ParamField body="usage_instructions" type="string">
+  Description of when and how the model should use this service (max 16,000 characters). Used by the LLM to decide which service to invoke.
+</ParamField>
+<ParamField body="headers" type="object">Custom HTTP headers to send with every request.</ParamField>
+<ParamField body="auth_config" type="object">
+  <Expandable title="Auth configuration">
+    <ParamField body="auth_type" type="string">`api_key`, `bearer`, or `oauth`.</ParamField>
+    <ParamField body="api_key_header" type="string">Header name for API key auth.</ParamField>
+    <ParamField body="scopes" type="array">OAuth scopes.</ParamField>
+  </Expandable>
+</ParamField>
+<ParamField body="advanced_config" type="object">
+  <Expandable title="Advanced options">
+    <ParamField body="timeout" type="integer">Request timeout in seconds (default 30).</ParamField>
+    <ParamField body="retry_count" type="integer">Retry attempts (default 3).</ParamField>
+    <ParamField body="retry_delay" type="integer">Delay between retries in seconds (default 1).</ParamField>
+  </Expandable>
+</ParamField>
+
+```bash
+curl -X POST $BASE/api/v1/mcp-services \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "GitHub Tools",
+    "transport_type": "sse",
+    "url": "https://mcp.example.com/sse",
+    "enabled": true
+  }'
+```
+
+### Set Service Credentials
+
+```bash
+curl -X PUT $BASE/api/v1/mcp-services/mcp-1/credentials \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"token":"ghp_..."}'
+```
+
+### Test a Service Connection
+
+```bash
+curl -X POST $BASE/api/v1/mcp-services/mcp-1/test \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Sync the Tool Catalog
+
+```bash
+curl -X POST $BASE/api/v1/mcp-services/mcp-1/metadata/refresh \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Configure Tool Approval
+
+Require human approval before the agent executes a sensitive tool:
+
+```bash
+curl -X PUT $BASE/api/v1/mcp-services/mcp-1/tool-approvals/delete_repository \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"require_approval":true}'
+```
+
+---
+
+## MCP Endpoints (Outbound MCP Server)
+
+MCP endpoints expose your workspace's tools to external MCP clients. Each endpoint gets a unique URL at `/mcp/:endpoint_id` and an authentication token.
+
+### Create an MCP Endpoint
+
+`POST /api/v1/mcp-endpoints`
+
+<ParamField body="name" type="string" required>Endpoint display name.</ParamField>
+<ParamField body="description" type="string">Optional description.</ParamField>
+<ParamField body="enabled" type="boolean" default="true">Whether the endpoint accepts connections.</ParamField>
+<ParamField body="knowledge_base_ids" type="array">
+  KB IDs accessible via this endpoint. Empty array means all workspace KBs.
+</ParamField>
+<ParamField body="tools" type="array">
+  Tools to expose. At least one required. Defaults to all read-only tools if omitted at creation.
+  Available tools include: `search_knowledge`, `read_document`, `ask`, and others listed at `GET /api/v1/mcp-endpoints/tools`.
+</ParamField>
+<ParamField body="default_agent_id" type="string">
+  Agent used for `ask` tool calls. Leave empty for the built-in quick-answer agent.
+</ParamField>
+<ParamField body="rate_limit_per_minute" type="integer" default="60">
+  Tool call limit per minute (max 6000).
+</ParamField>
+
+```bash
+curl -X POST $BASE/api/v1/mcp-endpoints \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "Product Docs Assistant",
+    "knowledge_base_ids": ["kb-1"],
+    "tools": ["search_knowledge", "read_document", "ask"]
+  }'
+```
+
+**Response:** `201` — includes a one-time `token` field. Store it securely; it cannot be retrieved again.
+
+<ResponseField name="id" type="string">Endpoint ID.</ResponseField>
+<ResponseField name="token" type="string">Bearer token for MCP clients. Shown once at creation.</ResponseField>
+<ResponseField name="token_hint" type="string">Last 4 characters of the token for identification.</ResponseField>
+<ResponseField name="path" type="string">Full endpoint path, e.g., `/mcp/ep-1`.</ResponseField>
+<ResponseField name="last_used_at" type="string">ISO 8601 timestamp of last client connection.</ResponseField>
+
+### List Available Tools
+
+```bash
+curl $BASE/api/v1/mcp-endpoints/tools -H "Authorization: Bearer $TOKEN"
+```
+
+### Rotate an Endpoint Token
+
+The old token is invalidated immediately:
+
+```bash
+curl -X POST $BASE/api/v1/mcp-endpoints/ep-1/rotate-token \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Connect from an External MCP Client
+
+The MCP endpoint uses Streamable HTTP at `$BASE/mcp/:endpoint_id`. Add it to your MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "weknora": {
+      "url": "http://localhost:8080/mcp/ep-1",
+      "headers": {
+        "Authorization": "Bearer <endpoint_token>"
+      }
+    }
+  }
+}
+```
+
+<Note>
+  The `/mcp/:endpoint_id` path is **not** under `/api/v1`. It is authenticated exclusively with `Authorization: Bearer <endpoint_token>`.
+</Note>
+
+---
+
+## Agent Runtime Interactions
+
+During a running `agent-chat` session, the agent may pause for human input.
+
+### Approve or Reject a Tool Call
+
+```bash
+curl -X POST $BASE/api/v1/agent/tool-approvals/p-1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"decision":"approve"}'
+```
+
+Pass `"decision":"reject"` to cancel the tool call. Optionally include `modified_args` to override the tool arguments before approval.
+
+### Resume After MCP OAuth
+
+When an agent needs OAuth authorization for an MCP service, it emits a `mcp_oauth_required` event. After the user completes the OAuth flow, resume:
+
+```bash
+curl -X POST $BASE/api/v1/agent/mcp-oauth-resolutions/p-1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"service_id":"mcp-1","decision":"authorize"}'
+```

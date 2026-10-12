@@ -1,0 +1,256 @@
+---
+title: "API Authentication: JWT, API Keys, and Embed Tokens"
+sidebarTitle: "Authentication"
+description: "Three auth methods for WeKnora's API: JWT Bearer tokens for web users, X-API-Key for machine clients, and Embed tokens for anonymous widget sessions."
+---
+
+WeKnora's authentication middleware (in `internal/middleware/auth.go`) inspects every request in order and chooses the first matching method. Web users authenticate with a short-lived JWT obtained via login. Automated systems and integrations use API Keys sent in the `X-API-Key` header. Anonymous visitors in embedded chat widgets exchange a publish token for a scoped session token. Internal MCP server endpoints use a separate Bearer token created when the endpoint is provisioned.
+
+<Tabs>
+  <Tab title="JWT Bearer">
+
+### Obtaining a Token
+
+POST credentials to `/api/v1/auth/login`. The response includes a short-lived `token` (access token) and a `refresh_token`.
+
+```bash
+curl -X POST $BASE/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"alice@example.com","password":"secret123"}'
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "user": { "id": "u-1", "email": "alice@example.com" },
+  "active_tenant": { "id": 1, "name": "My Workspace" },
+  "token": "<access_token>",
+  "refresh_token": "<refresh_token>"
+}
+```
+
+### Using the Token
+
+Include the access token as a Bearer credential on every authenticated request:
+
+```bash
+curl $BASE/api/v1/knowledge-bases \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Refreshing a Token
+
+```bash
+curl -X POST $BASE/api/v1/auth/refresh \
+  -H 'Content-Type: application/json' \
+  -d '{"refreshToken":"<refresh_token>"}'
+```
+
+### Switching Workspaces
+
+To operate in a workspace that is not the one encoded in your current JWT, add the `X-Tenant-ID` header. You must be an active member of that workspace (or a cross-tenant super-admin).
+
+```bash
+curl $BASE/api/v1/knowledge-bases \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Tenant-ID: 2"
+```
+
+<Warning>
+  Passing a malformed or zero value for `X-Tenant-ID` returns HTTP 400. Passing an ID for a workspace you are not a member of returns HTTP 403.
+</Warning>
+
+If a valid JWT carries no workspace and the endpoint is not on the no-tenant whitelist (e.g., `/auth/me`, `/me/invitations`), the server returns:
+
+```json
+{ "error": "tenant required", "code": "TENANT_REQUIRED" }
+```
+
+  </Tab>
+  <Tab title="X-API-Key">
+
+API Keys are long-lived credentials intended for server-to-server integrations and automated pipelines.
+
+### Workspace Keys
+
+Created at `POST /api/v1/tenants/:id/api-keys` (requires workspace Owner role). Bound to a single workspace; passing `X-Tenant-ID` pointing elsewhere returns 403.
+
+```bash
+curl $BASE/api/v1/knowledge-bases \
+  -H "X-API-Key: $API_KEY"
+```
+
+### Platform Keys
+
+Created at `POST /api/v1/system/admin/api-keys` (requires SystemAdmin). Can target any workspace by adding `X-Tenant-ID`. Without it, the server returns 409 `TENANT_REQUIRED` unless the endpoint is a platform-only route.
+
+```bash
+curl $BASE/api/v1/tenants/all \
+  -H "X-API-Key: $PLATFORM_KEY"
+```
+
+### Capability Model
+
+Every `/api/v1` route requires an explicit API Key policy. Keys without the required capability receive 403. A `full_access` key bypasses capability checks within its workspace.
+
+**Workspace Capabilities:**
+
+| Capability | Grants access to |
+|-----------|-----------------|
+| `retrieve` | Knowledge search and retrieval |
+| `ingest` | Document upload and management |
+| `chat` | Sessions and chat endpoints |
+| `read_agents` | Agent listing and details |
+| `manage_kbs` | Knowledge base lifecycle (create/update/delete) |
+| `manage_agents` | Agent lifecycle |
+| `message_history` | Chat history search and stats |
+| `manage_models` | Model configuration CRUD |
+| `manage_mcp_services` | MCP service management |
+| `manage_datasources` | Data source management |
+| `manage_channels` | IM and embed channel management |
+| `manage_vector_stores` | Vector store management |
+| `manage_storage_backends` | Storage backend management |
+| `manage_web_search` | Web search provider management |
+| `run_evaluations` | Evaluation tasks |
+| `manage_members` | Member and invitation management |
+| `manage_spaces` | Organization membership |
+| `manage_tenant_settings` | Workspace KV configuration |
+
+**Platform-only Capabilities (for platform keys):**
+
+`system_tenants_read`, `system_tenants_manage`, `system_settings_read`, `system_settings_manage`, `system_runtime_read`, `system_runtime_manage`, `system_audit_read`
+
+### Knowledge Base Whitelist
+
+Scoped keys can be restricted to a specific list of knowledge base IDs. Any request touching a knowledge base outside that list returns 403.
+
+### External User Principal
+
+API calls can carry an external user identity for attribution. Configure the mode in `PUT /api/v1/tenants/:id/api-principal-config`.
+
+- **`direct` mode:** Pass the external user ID in `X-External-User-ID` (≤128 characters).
+- **`signed_token` mode:** Pass an HS256-signed JWT in `X-External-User-Token`. The token must have `aud=weknora`, a valid `exp` (≤24 h lifetime), `tenant_id` matching the target workspace, and `sub` as the external user ID.
+
+</Tab>
+  <Tab title="Embed Token">
+
+Embed channels expose a public widget for anonymous visitors. Authentication uses a two-step token exchange.
+
+### Step 1 — Exchange Publish Token for Session Token
+
+The `publish_token` is obtained from the embed channel configuration (Admin only). Exchange it once per visitor session:
+
+```bash
+curl -X POST $BASE/api/v1/embed/ec-1/exchange \
+  -H "Authorization: Embed $PUBLISH_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "session_token": "<short_lived_session_token>",
+    "expires_in": 3600
+  }
+}
+```
+
+### Step 2 — Create a Visitor Session
+
+```bash
+curl -X POST $BASE/api/v1/embed/ec-1/sessions \
+  -H "Authorization: Embed $SESSION_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "s-1",
+    "sig": "<session_signature>"
+  }
+}
+```
+
+### Step 3 — Send Messages
+
+Use the session token as the Embed authorization header and pass the session signature in `X-Embed-Session`:
+
+```bash
+curl -N -X POST $BASE/api/v1/embed/ec-1/knowledge-chat/s-1 \
+  -H "Authorization: Embed $SESSION_TOKEN" \
+  -H "X-Embed-Session: $SIG" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"What are your office hours?"}'
+```
+
+<Note>
+  Session tokens cannot be used at the `/exchange` endpoint again — only publish tokens can be exchanged. Embed channels enforce per-IP and per-channel rate limits configured on the channel itself.
+</Note>
+
+  </Tab>
+  <Tab title="MCP Endpoint Token">
+
+The built-in MCP Server exposes workspace tools to external MCP clients at `/mcp/:endpoint_id` (this path is **not** under `/api/v1`). It uses its own authentication middleware.
+
+```bash
+Authorization: Bearer <endpoint_token>
+```
+
+The endpoint token is displayed once when the MCP endpoint is created via `POST /api/v1/mcp-endpoints`. It can be rotated at `POST /api/v1/mcp-endpoints/:endpoint_id/rotate-token`.
+
+```bash
+# Example: MCP client connection (Streamable HTTP)
+curl -X POST $BASE/mcp/ep-1 \
+  -H "Authorization: Bearer $ENDPOINT_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
+```
+
+Requests execute as the machine principal of the endpoint's owning workspace. The endpoint's permissions are limited to the tools and knowledge bases selected when the endpoint was created.
+
+<Warning>
+  Endpoint tokens grant tool-call access without user authentication. Store them securely and rotate immediately if compromised using `POST /api/v1/mcp-endpoints/:endpoint_id/rotate-token`.
+</Warning>
+
+  </Tab>
+</Tabs>
+
+## Identity Endpoint
+
+To inspect the identity and capabilities of the current caller — whether JWT, API Key, or any other method:
+
+```bash
+curl $BASE/api/v1/auth/me -H "X-API-Key: $API_KEY"
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "user": { "id": "u-1", "email": "alice@example.com" },
+    "tenant": { "id": 1, "name": "My Workspace" },
+    "memberships": [...],
+    "tenant_required": false,
+    "capabilities": {
+      "can_create_tenant": true,
+      "auto_accept_invitation": false
+    }
+  }
+}
+```
+
+## Role Reference
+
+| Role | Description |
+|------|-------------|
+| `owner` | Workspace lifecycle, API keys, member management |
+| `admin` | Models, infrastructure, channels, workspace configuration |
+| `contributor` | Create KBs and agents; modify own resources |
+| `viewer` | Read-only access and chat usage |
+| SystemAdmin | Platform-level administrator; guards `/system/admin/*` regardless of RBAC settings |
+
+Throughout the docs, "Viewer+" means the minimum required role is Viewer; "Admin+" means Admin or above; "Creator OR Admin+" means either the resource creator or an Admin-level member.

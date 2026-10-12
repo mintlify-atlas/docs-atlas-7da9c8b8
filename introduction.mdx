@@ -1,0 +1,104 @@
+---
+title: "WeKnora: LLM-Powered Knowledge Platform"
+sidebarTitle: "Introduction"
+description: "WeKnora is Tencent's open-source LLM knowledge platform for RAG Q&A, agent reasoning, and auto-wiki—fully self-hostable with 29 LLM vendors and 8 vector DBs."
+---
+
+WeKnora is an open-source, LLM-powered knowledge framework built by Tencent for enterprise document understanding, semantic retrieval, and multi-step reasoning. It brings a team's documents together so they can be searched, reasoned over, and kept up to date—all within an environment you control. A Go backend, Vue 3 frontend, and Python document-parsing service (`docreader`) combine into a single deployable stack that works on a laptop or a private Kubernetes cluster.
+
+## Three Ways to Work With Knowledge
+
+All three modes operate on the same knowledge bases, so you build your document corpus once and use it everywhere.
+
+<CardGroup cols={3}>
+  <Card title="RAG Q&A" icon="magnifying-glass">
+    Ask questions and get answers grounded in your documents, with inline citations back to the exact source passage. Hybrid keyword + vector search, reranking, and parent-child chunking keep recall high across diverse document types.
+  </Card>
+  <Card title="Agent Reasoning" icon="robot">
+    A ReAct agent plans multi-step work—searching knowledge bases, browsing the web, calling MCP tools, running skills in a sandbox, and operating your local Chrome or Edge browser—then shows every step in the conversation.
+  </Card>
+  <Card title="Auto Wiki" icon="book">
+    WeKnora extracts people, products, and concepts from ingested documents into interlinked Markdown wiki pages with a knowledge graph, in-browser editing, revision diff, and rollback.
+  </Card>
+</CardGroup>
+
+## Key Features
+
+### Document Ingestion and Parsing
+
+WeKnora accepts PDF, Word, Excel, PowerPoint, Markdown, HTML, EPUB, MHTML, XMind, images, and audio files, plus auto-sync from ten external data sources including Feishu, Notion, Confluence, GitLab, DingTalk Docs, Yuque, and RSS. The `docreader` service handles layout-aware text extraction, scanned-page OCR, table extraction, and multimodal image description via a configurable VLM.
+
+### Retrieval Pipeline
+
+Keyword (BM25) and vector search are fused with RRF, optionally reranked, and can be extended with GraphRAG via Neo4j. The pipeline is fully configurable per knowledge base: chunk size, overlap, embedding model, rerank threshold, and retrieval fan-out across multiple vector stores.
+
+### Models and Integrations
+
+<CardGroup cols={2}>
+  <Card title="29 LLM Vendors" icon="microchip">
+    OpenAI, Azure OpenAI, Anthropic, DeepSeek, Qwen (Alibaba Cloud), Zhipu, Hunyuan, Gemini, MiniMax, NVIDIA, SiliconFlow, LiteLLM, Ollama, and more—all swappable without code changes.
+  </Card>
+  <Card title="8 Vector Databases" icon="database">
+    PostgreSQL (pgvector + BM25 via ParadeDB), Elasticsearch, OpenSearch, Milvus, Weaviate, Qdrant, Apache Doris, and Tencent VectorDB.
+  </Card>
+  <Card title="10 IM Channels" icon="message">
+    WeCom, Feishu/Lark, QQBot, Slack, Telegram, DingTalk, Mattermost, WeChat, and Yunzhijia—deploy a Q&A bot in minutes.
+  </Card>
+  <Card title="MCP Server Built In" icon="plug">
+    Every workspace gets its own `/mcp/<endpoint_id>` over Streamable HTTP, scoped to specific knowledge bases and tool groups, for Cursor, Claude, and other MCP clients.
+  </Card>
+</CardGroup>
+
+### Security and Multi-Tenancy
+
+Workspace RBAC with four roles (Owner, Admin, Contributor, Viewer), scoped API keys, OIDC single sign-on, AES-256-GCM credential encryption (`SYSTEM_AES_KEY`), per-workspace audit logs, and SSRF-safe outbound requests with an optional whitelist-only mode.
+
+### Observability
+
+Langfuse traces every agent step, tool call, and token usage. The document parsing timeline shows stage-by-stage progress, and a task-queue dashboard lists queued and failed async jobs with worker-pool governance.
+
+## Deployment Options
+
+<CardGroup cols={2}>
+  <Card title="Docker Compose" icon="docker">
+    The standard path: pull images, copy `.env.example` to `.env`, set your secrets, and run `docker compose up -d`. All features available; optional services (Neo4j, MinIO, Langfuse) enabled with `--profile` flags.
+  </Card>
+  <Card title="Kubernetes (Helm)" icon="server">
+    The `helm/` chart bundles the app, frontend, docreader, ParadeDB, and Redis. Requires Kubernetes ≥ 1.25. Optional MinIO and Neo4j are chart-controlled.
+  </Card>
+  <Card title="Lite Single Binary" icon="bolt">
+    Zero external dependencies: SQLite (FTS5 + sqlite-vec) replaces PostgreSQL, and an in-memory queue replaces Redis. Ideal for personal use, offline environments, and resource-constrained machines.
+  </Card>
+  <Card title="Desktop App" icon="desktop">
+    Built on Wails v2, the desktop app wraps the Lite runtime with a native GUI, login-free start, and a macOS host sandbox. Build from source via `make package-mac-app`.
+  </Card>
+</CardGroup>
+
+<Warning>
+  WeKnora ships with login authentication, but for production deployments you should deploy it inside an internal or private network rather than exposing it directly to the public internet. Configure firewall rules and access controls, and update regularly for security patches.
+</Warning>
+
+## Architecture Overview
+
+WeKnora's architecture is a modular pipeline from document parsing, vectorization, and retrieval to LLM inference. Every component—LLM provider, vector store, object storage backend—can be replaced or extended independently. The frontend Nginx container reverse-proxies `/api/` to the Go backend on port 8080, and the `docreader` gRPC service runs isolated on port 50051 inside the Docker network.
+
+```
+Browser / SDK / CLI
+        │
+   frontend :80  (Nginx SPA + reverse proxy)
+        │ /api
+   app backend :8080  (Go / Gin — REST API, RAG, Agent, Asynq)
+    ├── docreader :50051  (Python gRPC — document parsing, OCR)
+    ├── ParadeDB :5432    (PostgreSQL 17 + BM25 + pgvector)
+    ├── Redis :6379        (SSE streaming, Asynq task queue)
+    ├── optional: Qdrant / Milvus / Weaviate / Elasticsearch …
+    ├── optional: Neo4j    (knowledge graph)
+    ├── optional: MinIO    (S3-compatible object storage)
+    └── optional: Langfuse :3000  (LLM observability)
+```
+
+## Next Steps
+
+- **[Quickstart](/quickstart)** — Clone the repo, configure `.env`, and ask your first RAG question in five minutes.
+- **[Installation](/installation)** — Compare deployment options and choose the right topology for your environment.
+- **[Configuration](/configuration)** — Reference for all environment variables across the ten configuration groups.

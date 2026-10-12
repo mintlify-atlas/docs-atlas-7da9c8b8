@@ -1,0 +1,172 @@
+---
+title: "WeKnora REST API Reference Overview"
+sidebarTitle: "Overview"
+description: "WeKnora's /api/v1 REST API: base URL, versioning, response envelope, error codes, pagination, SSE streaming, and a guide to all resource groups."
+---
+
+The WeKnora HTTP API provides programmatic access to every feature of the platform: knowledge bases, agents, chat sessions, channels, models, and tenant management. All endpoints live under a single `/api/v1` prefix and return a consistent JSON envelope. This page documents the conventions that apply across every resource group; individual resource pages cover their specific endpoints in detail.
+
+## Base URL and Version Prefix
+
+Every business endpoint is mounted under the `/api/v1` prefix. For a self-hosted deployment the base URL defaults to:
+
+```
+BASE=http://localhost:8080
+```
+
+A health check is available without authentication:
+
+```bash
+curl $BASE/health
+# {"status":"ok"}
+```
+
+<Note>
+  Swagger UI is available at `/swagger/index.html`, but only when `GIN_MODE` is not set to `release`. The default Docker Compose stack runs in release mode, so Swagger is disabled there by default.
+</Note>
+
+## Response Envelope
+
+Most endpoints return a standard success wrapper:
+
+```json
+{
+  "success": true,
+  "data": { ... }
+}
+```
+
+List responses add pagination metadata at the top level alongside `data`:
+
+```json
+{
+  "success": true,
+  "data": [...],
+  "total": 42,
+  "page": 1,
+  "page_size": 20
+}
+```
+
+A small number of system endpoints under `/system/admin/*` return raw objects without the wrapper, and `/system/info` uses `{"code":0,"msg":"success","data":...}`. These exceptions are noted on their respective pages.
+
+## Error Format
+
+Errors produced by application handlers use:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": 1003,
+    "message": "resource not found",
+    "details": null
+  }
+}
+```
+
+Middleware-layer rejections (auth, RBAC) emit a simpler form:
+
+```json
+{ "error": "Forbidden" }
+```
+
+or, for tenant-selection errors:
+
+```json
+{ "error": "tenant required", "code": "TENANT_REQUIRED" }
+```
+
+### Error Code Reference
+
+| Code | Meaning | HTTP Status |
+|------|---------|-------------|
+| 1000 | Bad request | 400 |
+| 1001 | Unauthorized | 401 |
+| 1002 | Forbidden | 403 |
+| 1003 | Not found | 404 |
+| 1004 | Method not allowed | 405 |
+| 1005 | Conflict | 409 |
+| 1006 | Too many requests / quota exceeded | 429 |
+| 1007 | Internal server error | 500 |
+| 1008 | Service unavailable | 503 |
+| 1009 | Timeout | — |
+| 1010 | Validation error | 400 |
+| 2000–2005 | Tenant errors (not found / conflict / disabled / …) | varies |
+| 2100–2103 | Agent config errors (missing thinking model / tools / iterations / temperature) | 400 |
+| 2200–2201 | Vector store binding errors | 400 |
+| 2300 | Model in use — cannot delete | 400 |
+
+## Pagination
+
+All paginated list endpoints accept these query parameters:
+
+<ParamField query="page" type="integer" default="1">
+  Page number, must be ≥ 1.
+</ParamField>
+
+<ParamField query="page_size" type="integer" default="20">
+  Items per page, range 1–100.
+</ParamField>
+
+Out-of-range values return error code 1010. Responses always echo back `total`, `page`, and `page_size`.
+
+Some endpoints (audit logs, runtime tasks, Wiki) use cursor-based pagination with `after_id` / `cursor` + `limit` parameters and return a `next_cursor` field instead.
+
+## SSE Streaming Protocol
+
+Chat endpoints return [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) with these response headers:
+
+```
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
+X-Accel-Buffering: no
+```
+
+Every event is `event: message` with a JSON `data:` payload of type `StreamResponse`:
+
+<ResponseField name="id" type="string">Request identifier.</ResponseField>
+<ResponseField name="response_type" type="string">
+  One of: `answer`, `references`, `thinking`, `tool_call`, `tool_result`,
+  `command_output`, `reflection`, `session_title`, `agent_query`,
+  `artifacts_pending`, `memory_recalled`, `user_message_injected`,
+  `context_compacted`, `tool_approval_required`, `tool_approval_resolved`,
+  `mcp_oauth_required`, `mcp_oauth_resolved`, `error`, `complete`.
+</ResponseField>
+<ResponseField name="content" type="string">Incremental text delta.</ResponseField>
+<ResponseField name="done" type="boolean">Whether this event type has finished streaming.</ResponseField>
+<ResponseField name="knowledge_references" type="array">Search results attached to `references` events.</ResponseField>
+<ResponseField name="usage" type="object">Token usage: `prompt_tokens`, `completion_tokens`, `total_tokens`.</ResponseField>
+
+The stream terminates with `response_type: "complete"` and `done: true`. On failure, a `response_type: "error"` event is emitted instead.
+
+```bash
+# Stream a chat response
+curl -N -X POST $BASE/api/v1/knowledge-chat/s-1 \
+  -H "X-API-Key: $API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"What is the refund policy?","knowledge_base_ids":["kb-1"]}'
+```
+
+## Rate Limits
+
+| Scope | Limit | Notes |
+|-------|-------|-------|
+| Public auth endpoints (`/auth/invitations/lookup`, `/auth/register-by-invite`) | 30 req/min per IP (shared) | Returns 429 (code 1006) |
+| Embed public routes | Per-channel `rate_limit_per_minute` (default 30) per IP/min | Configurable per channel |
+| All other endpoints | No global rate limit | Quota rejections use 429 (code 1006) |
+
+Only IPs listed in `WEKNORA_TRUSTED_PROXIES` (default: loopback + RFC-1918 ranges) are trusted for `X-Forwarded-For`.
+
+## Resource Groups
+
+| Group | Sidebar Page | Primary Prefix |
+|-------|-------------|----------------|
+| Authentication & Users | [Authentication](/api/authentication) | `/auth`, `/me/invitations` |
+| Knowledge Bases & Documents | [Knowledge Bases](/api/knowledge-bases) | `/knowledge-bases`, `/knowledge` |
+| Chat Sessions & Messages | [Chat Sessions](/api/chat-sessions) | `/sessions`, `/messages`, `/knowledge-chat`, `/agent-chat` |
+| Agents & MCP | [Agents](/api/agents) | `/agents`, `/mcp-services`, `/mcp-endpoints`, `/mcp/:id` |
+| IM & Embed Channels | [Channels](/api/channels) | `/im-channels`, `/embed-channels`, `/embed` |
+| Models & Vector Stores | [Models](/api/models) | `/models`, `/vector-stores`, `/storage-backends` |
+| Tenants, Members & API Keys | [Tenants](/api/tenants) | `/tenants`, `/system/admin/api-keys` |

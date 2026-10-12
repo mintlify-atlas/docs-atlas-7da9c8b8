@@ -1,0 +1,205 @@
+---
+title: "IM Channel Integrations: Bots for 10 Platforms"
+sidebarTitle: "IM Channels"
+description: "Connect WeKnora agents to WeCom, Feishu, Lark, Slack, Telegram, DingTalk, Mattermost, WeChat iLink, QQBot, and Yunzhijia with streaming replies and built-in slash commands."
+---
+
+IM channel integrations let users talk to a WeKnora agent directly inside their existing chat platforms. Once a channel is connected and enabled, users send messages to the bot and receive answers drawn from the agent's configured knowledge bases, tools, and skills — without logging in to WeKnora.
+
+To add a channel, navigate to **Settings → IM Integration**, create a new channel, select the platform, fill in the app credentials, and bind an agent. Webhook-mode platforms require you to paste the callback URL into the platform's developer console. WebSocket-mode platforms connect outbound from WeKnora — no public inbound address is needed.
+
+## Platform Capabilities
+
+WeKnora supports 10 IM platforms. The table below summarises their connection modes and capabilities.
+
+| Platform | Connection mode | Streaming replies | File download | Thread/topic support | Notes |
+|----------|----------------|:-----------------:|:-------------:|:--------------------:|-------|
+| WeCom `wecom` | **WebSocket** (Smart Bot) / Webhook (custom app) | WebSocket only | Both modes | No | WebSocket is the recommended mode |
+| Feishu `feishu` | **WebSocket** / Webhook | Yes (streaming card) | Yes | Yes (`root_id`) | Long-connection event stream |
+| Lark `lark` | **WebSocket** / Webhook | Yes (streaming card) | Yes | Yes | Same adapter as Feishu; `open.larksuite.com` |
+| Slack `slack` | **WebSocket** (Socket Mode) / Webhook (Events API) | Yes | Yes | Yes (`thread_ts`) | |
+| Telegram `telegram` | **WebSocket** (long-poll getUpdates) / Webhook | Yes (message edit) | Yes | Yes (Forum Topics) | |
+| DingTalk `dingtalk` | **WebSocket** (Stream mode only since v0.8.2) | Yes (AI card) | Yes | No | Requires `card_template_id` |
+| Mattermost `mattermost` | **Webhook** only (Outgoing Webhook + REST API) | Yes | Yes | Yes (`root_id`) | Requires `outgoing_token` |
+| WeChat iLink `wechat` | **Long-poll** (forced; `output_mode=full`) | No (full output only) | Yes | No | |
+| QQBot `qqbot` | **WebSocket** only | No | No | No | |
+| Yunzhijia `yunzhijia` | **Webhook** / WebSocket | No | Yes | Yes (root msgId) | WS address inferred from `send_msg_url` |
+
+### Required Credential Fields
+
+<Tabs>
+  <Tab title="WeCom">
+    **WebSocket mode** (recommended):
+    - `bot_id` — Smart Bot ID
+    - `bot_secret` — Smart Bot secret
+    - `ws_endpoint` — WebSocket endpoint URL
+    - `bot_name` — Bot display name
+
+    **Webhook mode** (custom app):
+    - `corp_id` — Enterprise Corp ID
+    - `agent_secret` — Agent secret
+    - `token` — Token for callback verification
+    - `encoding_aes_key` — AES key for message encryption
+    - `corp_agent_id` — Agent ID
+    - `api_base_url` — API base URL (optional, for private proxies)
+  </Tab>
+  <Tab title="Feishu / Lark">
+    - `app_id` — App ID from the Feishu Open Platform
+    - `app_secret` — App Secret
+    - `verification_token` — Webhook event verification token
+    - `encrypt_key` — Message encryption key
+
+    `api_base_url` — optional; overrides the API origin for both REST calls and the long-connection SDK bootstrap. Used when routing through a private proxy. Leave blank for the default Feishu or Lark cloud address.
+  </Tab>
+  <Tab title="Slack">
+    **WebSocket (Socket Mode)**:
+    - `app_token` — App-level token (starts with `xapp-`)
+    - `bot_token` — Bot OAuth token (starts with `xoxb-`)
+
+    **Webhook (Events API)**:
+    - `bot_token` — Bot OAuth token
+    - `signing_secret` — Signing secret for request verification
+  </Tab>
+  <Tab title="Telegram">
+    - `bot_token` — Bot token from `@BotFather`
+    - `secret_token` — (Webhook mode only) Secret token for webhook verification
+  </Tab>
+  <Tab title="DingTalk">
+    - `client_id` — App Client ID
+    - `client_secret` — App Client Secret
+    - `card_template_id` — AI card template ID (required for streaming replies)
+
+    <Note>
+      Since v0.8.2, DingTalk only supports WebSocket (Stream mode). If you have existing Webhook-mode channels, migration `000096` converts them automatically — but you must also enable the Stream mode in the DingTalk developer console.
+    </Note>
+  </Tab>
+  <Tab title="Mattermost">
+    - `site_url` — Your Mattermost instance URL
+    - `bot_token` — Bot user token
+    - `outgoing_token` — **Required** — token from the Outgoing Webhook configuration
+    - `bot_user_id` — Bot's user ID (for filtering bot's own messages)
+    - `post_to_main` — Whether to reply to the main channel or in a thread
+  </Tab>
+  <Tab title="QQBot">
+    - `app_id` — QQ Bot App ID
+    - `client_secret` — Client Secret
+    - `api_base_url` — API base URL
+    - `gateway_url` — WebSocket gateway URL
+  </Tab>
+  <Tab title="Yunzhijia">
+    - `send_msg_url` — **Required** — message sending URL (also used to infer the WebSocket address)
+    - `secret` — Signature secret
+    - `app_id` / `app_secret` — Application credentials
+    - `allowed_webhook_host_suffix` — Restrict inbound webhook host
+    - `timeout_seconds` — Request timeout
+  </Tab>
+</Tabs>
+
+## Adding a New IM Channel
+
+<Steps>
+  <Step title="Open IM Integration settings">
+    Go to **Settings → IM Integration** and click **New Channel**.
+  </Step>
+  <Step title="Select the platform">
+    Choose your platform from the list. The form will show the appropriate credential fields for that platform.
+  </Step>
+  <Step title="Fill in credentials">
+    Enter the required fields for your platform (see the Credential Fields section above). WeCom and DingTalk default to WebSocket mode; Mattermost and Yunzhijia default to Webhook mode; WeChat iLink is forced to long-poll.
+  </Step>
+  <Step title="Bind an agent">
+    Select the agent that should answer messages in this channel. The agent determines which knowledge bases, tools, MCP services, and web search settings are used.
+  </Step>
+  <Step title="Configure optional settings">
+    - **Reply language**: Fix the bot's reply language to `zh-CN`, `en-US`, `ja-JP`, `ko-KR`, or `ru-RU`. Leave blank to use the deployment default.
+    - **Session mode**: `user` (default — each user gets a separate conversation, isolated per chat group) or `thread` (each top-level message or topic thread starts a new session).
+    - **File knowledge base**: Optionally specify a knowledge base to save user-uploaded files into. Files are always analysed for the current answer regardless of this setting.
+    - **Output mode**: `stream` (default) or `full` (send the complete answer in one message).
+  </Step>
+  <Step title="Copy the callback URL (Webhook mode only)">
+    For Webhook-mode platforms (or Feishu/Slack Webhook variants), copy the generated callback URL:
+    ```
+    https://<your-domain>/api/v1/im/callback/<channel_id>
+    ```
+    Paste this URL into the platform's event subscription or callback address setting. WeKnora automatically handles the platform's URL verification challenge.
+  </Step>
+  <Step title="Enable the channel">
+    Toggle the channel to **Enabled**. WeKnora will establish the connection (or start listening for webhooks) and the bot will begin responding to messages.
+  </Step>
+</Steps>
+
+## Built-in Commands
+
+All platforms support a set of built-in slash commands. The command parser distinguishes between command attempts (e.g., `/help`) and path-like text (e.g., `/api/v2/users`) — the latter is passed normally to the QA pipeline.
+
+| Command | Description |
+|---------|-------------|
+| `/help [command]` | Lists all available commands, or shows detailed usage for a specific command |
+| `/info` | Shows the current agent's configuration: mode, enabled knowledge bases, skills, MCP services, web search status, and output mode |
+| `/search <keywords>` | Searches the agent's accessible knowledge bases directly (no AI summary), returning up to 5 raw excerpts of 200 characters each with relevance scores |
+| `/stop` | Interrupts an in-progress answer, including long ReAct reasoning chains. Works cross-instance via Redis |
+| `/clear` | Clears the conversation memory. The next message starts a fresh session |
+
+<Note>
+  Slash commands bypass rate limiting so users can always `/stop` a runaway response even during high-traffic periods.
+</Note>
+
+## Reply Language Setting
+
+Each channel can have its own reply language, overriding the deployment default:
+
+| Value | Language |
+|-------|----------|
+| `zh-CN` | Simplified Chinese |
+| `en-US` | English |
+| `ja-JP` | Japanese |
+| `ko-KR` | Korean |
+| `ru-RU` | Russian |
+| *(empty)* | Uses `WEKNORA_LANGUAGE` env var, or `zh-CN` if unset |
+
+The `Accept-Language` header from IM platform callbacks reflects the platform, not the user — it is intentionally ignored for reply language decisions.
+
+## File and Image Handling
+
+When a user sends a file or image through a supported platform, the bot downloads it and uses the content to answer the question. This works even without a file knowledge base configured.
+
+If a **File Knowledge Base** is set on the channel, the file is additionally saved to that knowledge base in the background. This does not affect the current response and does not trigger an "indexed" confirmation message. Parsed text is limited to the first 500 lines or 32 KiB, whichever comes first. Files larger than 32 MiB cannot be processed.
+
+## Image Links in Replies
+
+When an agent's answer references knowledge base images, WeKnora rewrites internal `resource://` URLs to publicly accessible HTTP(S) URLs before sending. Two approaches:
+
+1. **Public storage endpoint**: Use a public-facing object storage endpoint. The `resource://` URL resolves to a pre-signed URL from your storage provider.
+2. **Configure `APP_EXTERNAL_URL`**: Set `APP_EXTERNAL_URL` to your deployment URL. `resource://` is rewritten to `<APP_EXTERNAL_URL>/r/<token>`. The official Nginx image includes the required `/r/` reverse-proxy location.
+
+<Warning>
+  If `APP_EXTERNAL_URL` is not configured and you have IM channels enabled, WeKnora will print a startup warning. Images in bot replies will not display correctly with a local-only MinIO deployment.
+</Warning>
+
+## Multi-Instance Reliability
+
+WeKnora uses Redis to coordinate IM channels across multiple instances:
+
+| Redis key | Purpose |
+|-----------|---------|
+| `im:ws:leader:<channelID>` | Leader election for WebSocket/long-poll channels (TTL 15s, renewed every 5s) |
+| `im:dedup:<messageID>` | Cross-instance message deduplication (TTL 5min) |
+| `im:stop:<userKey>` | Cross-instance `/stop` pre-execution flag (TTL 30s) |
+| `im:queue:user:<userKey>` | Global per-user queue count |
+
+Only the elected leader instance maintains the long-connection for each channel. If the leader goes down, another instance automatically takes over within 15 seconds.
+
+## MCP OAuth in IM Channels
+
+When an agent uses an OAuth-authenticated MCP service and the IM user has not yet authorised it, WeKnora does not block the conversation. Instead, it appends an authorisation link at the end of the reply. Once the user completes OAuth via browser, they resend their original message and the tool becomes available.
+
+## Channel Management API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/agents/:id/im-channels` | Create a channel for an agent |
+| `GET` | `/api/v1/agents/:id/im-channels` | List an agent's channels (no credentials returned) |
+| `GET` | `/api/v1/im-channels` | List all channels across the workspace |
+| `PUT` | `/api/v1/im-channels/:id` | Update channel settings |
+| `DELETE` | `/api/v1/im-channels/:id` | Delete a channel |
+| `POST` | `/api/v1/im-channels/:id/toggle` | Enable or disable a channel |

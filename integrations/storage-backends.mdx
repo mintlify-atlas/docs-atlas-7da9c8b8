@@ -1,0 +1,227 @@
+---
+title: "Object Storage Backends: S3, COS, MinIO, and More"
+sidebarTitle: "Storage"
+description: "Configure local filesystem, MinIO, AWS S3, Tencent COS, Volcengine TOS, Alibaba OSS, Kingsoft KS3, and Huawei OBS as object storage for WeKnora knowledge bases."
+---
+
+Storage backends hold the raw files, parsed images, and export artifacts that WeKnora produces when you import documents into a knowledge base. A workspace can register multiple storage backend instances and assign each knowledge base its own storage location — for example, to separate data by team, comply with data residency requirements, or migrate to a new provider without disrupting existing indexed content.
+
+Storage backends are separate from the vector store (which holds embeddings and search indexes). Changing the storage backend for a knowledge base that already has files requires creating a new knowledge base and migrating content — you cannot hot-swap the storage backend of a non-empty knowledge base.
+
+## Registering a Storage Backend
+
+<Steps>
+  <Step title="Open Storage settings">
+    Go to **Settings → Storage** as a workspace Admin.
+  </Step>
+  <Step title="Create a new backend">
+    Click **New Backend**, select a provider, and fill in the connection parameters (see the provider sections below).
+  </Step>
+  <Step title="Test the connection">
+    Click **Test Connection**. The test performs a real read/write operation to verify the endpoint, bucket, and credentials.
+  </Step>
+  <Step title="Set as default (optional)">
+    Mark the instance as the workspace default. New knowledge bases will use this backend unless overridden individually.
+  </Step>
+  <Step title="Assign to knowledge bases">
+    In the knowledge base settings → Storage tab, select a specific backend. This is only possible when the knowledge base is empty. Once files are imported, the storage backend field is locked.
+  </Step>
+</Steps>
+
+<Note>
+  The set of available providers can be restricted with the `STORAGE_ALLOW_LIST` environment variable. Leave it empty to allow all providers.
+</Note>
+
+## Provider Configuration
+
+<Tabs>
+  <Tab title="Local">
+    Stores files on the local filesystem of the app container. No credentials or bucket name are required.
+
+    **Use case**: Development, single-container deployments, or when persistent storage is provided via a mounted volume.
+
+    | Field | Required | Description |
+    |-------|----------|-------------|
+    | `path_prefix` | No | Subdirectory within the local storage root |
+
+    <Warning>
+      Local storage is not suitable for multi-instance (horizontally scaled) deployments. All app instances must share the same filesystem for files to be accessible.
+    </Warning>
+  </Tab>
+  <Tab title="MinIO">
+    Connects to a MinIO instance — either the one bundled with the Docker Compose deployment or an external MinIO cluster.
+
+    | Field | Required | Description |
+    |-------|----------|-------------|
+    | `mode` | Yes | `docker` (use the bundled MinIO via env vars) or `remote` (external MinIO) |
+    | `endpoint` | `remote` mode | MinIO server address (e.g., `minio.example.com:9000`) |
+    | `access_key_id` | `remote` mode | MinIO access key |
+    | `secret_access_key` | `remote` mode | MinIO secret key |
+    | `bucket_name` | Yes | Target bucket name |
+    | `use_ssl` | No | Whether to use HTTPS (default: false) |
+    | `path_prefix` | No | Key prefix within the bucket |
+
+    When `mode=docker`, the connection parameters are read from the `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, and `MINIO_SECRET_KEY` environment variables automatically.
+
+    <Note>
+      In `docker` mode, you can register multiple instances pointing to different buckets on the same MinIO server. Each instance still needs its own `bucket_name`.
+    </Note>
+  </Tab>
+  <Tab title="AWS S3">
+    Connects to Amazon S3 or any S3-compatible service (Cloudflare R2, Backblaze B2, etc.).
+
+    | Field | Required | Description |
+    |-------|----------|-------------|
+    | `endpoint` | Yes | S3 endpoint URL (e.g., `https://s3.us-east-1.amazonaws.com`) |
+    | `region` | Yes | AWS region (e.g., `us-east-1`) |
+    | `access_key_id` | Yes | AWS Access Key ID |
+    | `secret_access_key` | Yes | AWS Secret Access Key |
+    | `bucket_name` | Yes | S3 bucket name |
+    | `use_ssl` | No | HTTPS (default: false — set `endpoint` to an `https://` URL to use TLS) |
+    | `force_path_style` | No | Use path-style addressing; required for most S3-compatible services |
+    | `path_prefix` | No | Key prefix within the bucket |
+
+    <Tip>
+      For Cloudflare R2, set `endpoint` to your R2 account endpoint, `force_path_style: true`, and use your R2 API token credentials.
+    </Tip>
+  </Tab>
+  <Tab title="Tencent COS">
+    Connects to Tencent Cloud Object Storage.
+
+    | Field | Required | Description |
+    |-------|----------|-------------|
+    | `region` | Yes | COS region (e.g., `ap-guangzhou`) |
+    | `access_key_id` | Yes | Tencent Cloud SecretId |
+    | `secret_access_key` | Yes | Tencent Cloud SecretKey |
+    | `bucket_name` | Yes | Bucket name |
+    | `app_id` | Yes | Tencent Cloud AppID |
+    | `temp_bucket_name` / `temp_region` | No | Separate bucket for temporary files |
+    | `path_prefix` | No | Key prefix within the bucket |
+
+    COS does not require an `endpoint` field — the endpoint is automatically derived from the region and app ID.
+  </Tab>
+  <Tab title="Volcengine TOS">
+    Connects to Volcengine Tinder Object Storage.
+
+    | Field | Required | Description |
+    |-------|----------|-------------|
+    | `endpoint` | Yes | TOS endpoint URL |
+    | `region` | Yes | TOS region (e.g., `cn-beijing`) |
+    | `access_key_id` | Yes | Access Key ID |
+    | `secret_access_key` | Yes | Secret Access Key |
+    | `bucket_name` | Yes | Bucket name |
+    | `temp_bucket_name` / `temp_region` | No | Separate bucket for temporary files |
+    | `path_prefix` | No | Key prefix |
+  </Tab>
+  <Tab title="Alibaba OSS">
+    Connects to Alibaba Cloud Object Storage Service.
+
+    | Field | Required | Description |
+    |-------|----------|-------------|
+    | `endpoint` | Yes | OSS endpoint (e.g., `https://oss-cn-hangzhou.aliyuncs.com`) |
+    | `region` | Yes | OSS region (e.g., `cn-hangzhou`) |
+    | `access_key_id` | Yes | Alibaba Cloud AccessKeyId |
+    | `secret_access_key` | Yes | Alibaba Cloud AccessKeySecret |
+    | `bucket_name` | Yes | Bucket name |
+    | `use_temp_bucket` | No | Set to `true` to enable a separate temp bucket |
+    | `temp_bucket_name` / `temp_region` | `use_temp_bucket=true` | Temp bucket name and region |
+    | `path_prefix` | No | Key prefix |
+  </Tab>
+  <Tab title="Kingsoft KS3">
+    Connects to Kingsoft Cloud Standard Storage Service.
+
+    | Field | Required | Description |
+    |-------|----------|-------------|
+    | `endpoint` | Yes | KS3 endpoint URL |
+    | `region` | Yes | KS3 region |
+    | `access_key_id` | Yes | Access Key ID |
+    | `secret_access_key` | Yes | Secret Access Key |
+    | `bucket_name` | Yes | Bucket name |
+    | `path_prefix` | No | Key prefix |
+
+    KS3 redirect responses are followed with per-hop SSRF validation. Request signatures are not forwarded to redirect destinations.
+  </Tab>
+  <Tab title="Huawei OBS">
+    Connects to Huawei Cloud Object Storage Service.
+
+    | Field | Required | Description |
+    |-------|----------|-------------|
+    | `endpoint` | Yes | OBS endpoint (e.g., `obs.cn-north-4.myhuaweicloud.com`) |
+    | `region` | Yes | OBS region |
+    | `access_key_id` | Yes | Access Key ID |
+    | `secret_access_key` | Yes | Secret Access Key |
+    | `bucket_name` | Yes | Bucket name |
+    | `use_ssl` | No | HTTPS (default: false) |
+    | `path_prefix` | No | Key prefix |
+
+    <Note>
+      Huawei Cloud has rejected path-style requests to domain endpoints since 2023-12-30. When `endpoint` is a domain name, WeKnora uses virtual-hosted-style addressing (`<bucket>.<endpoint-host>`). Path-style is still used when `endpoint` is an IP address.
+    </Note>
+  </Tab>
+</Tabs>
+
+## Credential Security
+
+The `access_key_id` and `secret_access_key` fields are stored encrypted (AES-256-GCM). They are masked in API responses and can only be updated via the dedicated credentials sub-resource. The values are never returned in plaintext.
+
+Internal addresses (e.g., `minio:9000` in Docker) must pass SSRF validation. Private network addresses must be added to `SSRF_WHITELIST`. Custom endpoints are validated at save time.
+
+## Multiple Storage Instances Per Workspace
+
+You can register as many storage backends as needed. Common patterns:
+
+<CardGroup cols={2}>
+  <Card title="Team isolation" icon="users">
+    Give each team or project its own bucket so storage usage, access policies, and costs can be tracked separately.
+  </Card>
+  <Card title="Data residency" icon="globe">
+    Store sensitive knowledge bases in a region-specific bucket while using a default bucket for general content.
+  </Card>
+  <Card title="Provider migration" icon="arrow-right-arrow-left">
+    Register a new cloud provider as a backend, assign new knowledge bases to it, and leave existing ones on the old provider. No data migration required.
+  </Card>
+  <Card title="Temporary vs. permanent files" icon="clock">
+    COS, TOS, and OSS support a separate `temp_bucket` for transient processing artifacts, keeping your main bucket clean.
+  </Card>
+</CardGroup>
+
+## File Access and Public URLs
+
+For files to be accessible to IM bots, MCP clients, and the web widget, the storage backend must produce publicly accessible URLs, or you must configure `APP_EXTERNAL_URL`.
+
+Two options:
+
+1. **Public-facing object storage endpoint**: Set the bucket and endpoint to a publicly accessible address. `resource://` references resolve to pre-signed or public URLs from the storage provider.
+
+2. **`APP_EXTERNAL_URL` proxy**: Set `APP_EXTERNAL_URL` to your deployment's public URL. `resource://` references are rewritten to `<APP_EXTERNAL_URL>/r/<token>`. The official Nginx configuration includes the required `/r/` reverse-proxy location.
+
+<Note>
+  For local filesystem storage or MinIO deployed in the internal Docker network (`minio:9000`), option 2 is required. Images will not display in IM channels or MCP results without it.
+</Note>
+
+## Storage vs. Vector Store
+
+These are two independent systems:
+
+| | Storage Backend | Vector Store |
+|---|---|---|
+| Stores | Raw files, images, export artifacts | Vectors and search indexes |
+| Configured in | Settings → Storage | Settings → Vector Store |
+| Knowledge base field | `storage_backend_id` | `vector_store_id` |
+| Provider examples | Local, MinIO, S3, COS, TOS, OSS, KS3, OBS | PostgreSQL (pgvector), Qdrant, Milvus, Elasticsearch |
+
+## Storage Backend API
+
+| Method | Path | Permission | Description |
+|--------|------|-----------|-------------|
+| `GET` | `/api/v1/storage-backends/types` | Viewer | List allowed provider types |
+| `GET` | `/api/v1/storage-backends` | Viewer | List registered instances |
+| `GET` | `/api/v1/storage-backends/:id` | Viewer | Instance details |
+| `POST` | `/api/v1/storage-backends` | Admin | Register a new backend |
+| `PUT` | `/api/v1/storage-backends/:id` | Admin | Update a backend |
+| `DELETE` | `/api/v1/storage-backends/:id` | Admin | Delete a backend |
+| `POST` | `/api/v1/storage-backends/test` | Admin | Test with unsaved parameters |
+| `POST` | `/api/v1/storage-backends/:id/test` | Admin | Test a saved backend |
+| `PUT` | `/api/v1/storage-backends/:id/default` | Admin | Set as workspace default |
+
+API Keys need the `manage_storage_backends` capability or full-access.

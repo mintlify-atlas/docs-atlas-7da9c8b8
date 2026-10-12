@@ -1,0 +1,189 @@
+---
+title: "Local Browser: Agents Control Your Chrome or Edge"
+sidebarTitle: "Local Browser"
+description: "Pair the open-source BrowserSkill extension with WeKnora so agents can open pages, fill forms, and complete web tasks in your own Chrome or Edge browser."
+---
+
+WeKnora's Local Browser feature lets AI agents operate the browser running on your own computer. Instead of a headless cloud browser, the agent controls a real tab in your Chrome or Edge window — you can watch every step, pause at any point, and take over when human interaction is needed (logins, CAPTCHAs, OAuth flows). The underlying technology is the open-source [BrowserSkill](https://github.com/Tencent/BrowserSkill) extension by Tencent.
+
+<Note>
+The Local Browser feature requires pairing a **BrowserSkill extension** (version 0.3.1+) with WeKnora. The extension communicates with a BrowserSkill daemon running inside the WeKnora app via a WebSocket connection. No skill sandbox or Docker is required.
+</Note>
+
+## How It Works
+
+1. You install the BrowserSkill extension in your browser and pair it with your WeKnora instance using a one-time pairing link.
+2. When you enable **Local Browser** on a chat message and submit a task, WeKnora's agent plans and dispatches browser actions (open URL, click, fill form, screenshot, scroll) through the extension.
+3. A live task preview appears in the chat panel — you see what page the agent is on and can pause, resume, or end the task at any time.
+4. For steps that require human judgment — logins, CAPTCHA, OAuth consent — the agent calls `request_help`. A prompt appears in your browser asking you to complete the step, then resume.
+
+The agent only controls tabs it opened or tabs you explicitly lend it via tab-borrowing. It cannot access your existing tabs without your confirmation.
+
+## Install the Extension
+
+Choose the installation method that works for your environment:
+
+<Tabs>
+  <Tab title="Chrome Web Store">
+    **Requires Chrome or a Chromium-based browser (version 125+)**
+
+    [Install BrowserSkill from the Chrome Web Store](https://chromewebstore.google.com/detail/hhcmgoofomhgciiibhipgmgkgnoenaoi)
+  </Tab>
+  <Tab title="Edge Add-ons">
+    **Requires Microsoft Edge (Chromium 125+)**
+
+    [Install BrowserSkill from the Edge Add-ons store](https://microsoftedge.microsoft.com/addons/detail/browserskill/emacgiaaaiojkkpkddmmdfhmokgmnikg)
+  </Tab>
+  <Tab title="Manual (ZIP)">
+    If you cannot access the extension stores, download the companion ZIP from WeKnora:
+
+    1. Open **Toolbox → Browser Connection** in WeKnora.
+    2. Click **Manual Install (Fallback)** to download the ZIP.
+    3. Unzip it to a local folder.
+    4. In Chrome, open `chrome://extensions` (or `edge://extensions` in Edge).
+    5. Enable **Developer mode**.
+    6. Click **Load unpacked** and select the unzipped folder.
+
+    Re-installing from ZIP changes the extension ID and requires re-pairing.
+  </Tab>
+</Tabs>
+
+<Warning>
+The extension must be **version 0.3.1 or later**. If the Toolbox shows a version warning, update the extension from the store or download the latest ZIP from the Browser Connection page.
+</Warning>
+
+## Pairing the Extension with WeKnora
+
+<Steps>
+  <Step title="Open the Browser Connection page">
+    In the WeKnora sidebar, click **Toolbox** and select the **Browser Connection** tab.
+
+    (Old bookmark: **Settings → Browser Connection** — this now redirects to Toolbox.)
+  </Step>
+  <Step title="Copy the pairing link">
+    The page displays a one-time pairing link (valid for 5 minutes). Copy it.
+  </Step>
+  <Step title="Connect from the extension">
+    1. Click the BrowserSkill extension icon in your browser toolbar.
+    2. Open **Connection Settings → Remote Connection**.
+    3. Paste the pairing link and save.
+
+    The extension connects to WeKnora over WebSocket. The Toolbox page should show a green **Connected** indicator.
+  </Step>
+  <Step title="Verify the connection">
+    The **Browser Connection** tab badge in Toolbox shows the connection state:
+    - 🟢 **Connected** — extension is live and ready
+    - 🟠 **Offline** — previously paired but not currently connected
+    - ⚪ **Unpaired** — no pairing yet
+
+    The WeKnora sidebar also shows a browser icon next to Toolbox. When connected, a green dot appears on that icon. You can hide this indicator by toggling **Show connection status in sidebar** on the Browser Connection page.
+  </Step>
+</Steps>
+
+## Using Local Browser in a Chat
+
+<Steps>
+  <Step title="Enable Local Browser for a message">
+    In the chat input, toggle **Local Browser** on before submitting your task. The toggle enables the browser capability for that specific turn — pairing does not auto-enable it.
+  </Step>
+  <Step title="Submit a task">
+    Describe what you want the agent to do. For example:
+
+    > "Search for the latest pricing from our competitor, extract the three main plan tiers, and paste them into a new doc in the Marketing KB."
+  </Step>
+  <Step title="Watch the live task preview">
+    A task preview panel appears in the chat showing:
+    - The current page the agent is viewing (low-frame-rate screenshot — not a video)
+    - The action the agent is performing
+    - Controls to **Pause**, **Resume**, or **End** the task
+  </Step>
+  <Step title="Handle human-in-the-loop steps">
+    When the agent needs you to act (e.g., a login page), a `request_help` prompt appears. Switch to the browser, complete the required action, then click **Done** in the help prompt. The agent observes the resulting page and continues.
+  </Step>
+</Steps>
+
+## Tab Borrowing
+
+If the agent needs to access a page you already have open (rather than a new tab), it can request a **tab borrow**:
+
+1. The agent calls `tab_borrow` — a confirmation prompt appears in your browser.
+2. You confirm, granting temporary control.
+3. When the task is done, the agent calls `tab_return` to restore the tab.
+
+Pages dragged into the task window are **not** automatically authorized — explicit borrowing confirmation is still required.
+
+<Note>
+The borrow confirmation prompt must appear on a normal HTTP(S) page. It cannot be shown on extension settings pages, new-tab pages, or standalone popup windows.
+</Note>
+
+## Security Model
+
+| Boundary | Behavior |
+|---|---|
+| **Tab scope** | Agent can only operate tabs it created, or tabs explicitly borrowed via `tab_borrow` |
+| **Device authorization** | Pairing is scoped per workspace and per user. Activating a new device replaces the previous authorization. |
+| **Token lifetime** | Device tokens last 90 days; auto-rotated after 30 days. The pairing link is valid for 5 minutes. |
+| **Revocation** | Removing a workspace member, deactivating a user, or generating a new pairing link immediately revokes the old device. |
+| **Internal routing** | The `/api/v1/local-browser/internal` endpoint (used for cluster-internal RPC) is blocked from public access by the nginx configuration. |
+
+Credentials passed during human-help steps (passwords, OAuth tokens, MFA codes) are handled in the actual browser process — they are never sent through WeKnora's servers.
+
+## Pause, Resume, and Task Recovery
+
+- **Pause** cancels the current browser action but does not unpair the extension.
+- **Resume** restarts the task from where it was paused. If the agent has already finished its planning round, you must send a new message to continue.
+- After a server restart or network interruption, in-progress tasks do **not** auto-replay. Check the page state in the browser before resuming.
+- When a task ends, pages explicitly created by the agent are closed. Borrowed pages are returned. You can instruct the agent to preserve open pages if needed.
+
+## Deployment (Self-Hosted)
+
+The bundled WeKnora Docker image includes the BrowserSkill daemon and extension ZIP. For native deployments, build from source:
+
+```bash
+./scripts/build_browserskill.sh
+```
+
+Requirements: Git, Node.js, Python 3, Rust/Cargo, C compiler; Linux additionally needs CMake.
+
+Configure the daemon paths in your environment:
+
+```bash
+BROWSERSKILL_BINARY=/opt/weknora/browserskill/bsk
+BROWSERSKILL_EXTENSION_PATH=/opt/weknora/browserskill/browser-skill-weknora-0.3.1.zip
+BROWSERSKILL_MAX_CONNECTIONS=32
+
+# Override only if behind a custom gateway domain
+BROWSERSKILL_PUBLIC_URL=wss://weknora.example.com/api/v1/local-browser/extension
+
+# For multi-replica deployments — unique per node, must be a direct (non-LB) address
+BROWSERSKILL_INTERNAL_URL=http://10.0.0.12:8080
+BROWSERSKILL_CLUSTER_SECRET=<shared-32-char-random-secret>
+```
+
+<Warning>
+For remote deployments, the WebSocket connection (`wss://`) requires a browser-trusted TLS certificate. `localhost` without TLS only works for local connections.
+</Warning>
+
+## Troubleshooting
+
+<Accordion title="Extension version warning in Toolbox">
+  Update from the Chrome Web Store, Edge Add-ons, or download the companion ZIP from the Browser Connection page. When re-installing from ZIP, keep the same extracted directory to preserve the extension ID; otherwise re-pair after installation.
+</Accordion>
+
+<Accordion title="Pairing succeeds but WebSocket fails">
+  - Confirm the public URL (`BROWSERSKILL_PUBLIC_URL`) is reachable from the browser's machine.
+  - Verify the TLS certificate is trusted by the browser.
+  - Check that your reverse proxy forwards WebSocket `Upgrade` headers for `/api/v1/local-browser/extension`.
+</Accordion>
+
+<Accordion title="Device shows Connected but tasks don't run">
+  - Verify **Local Browser** is enabled in the chat input for that specific message.
+  - Check whether the task is paused or waiting for a `tab_borrow` confirmation.
+  - Look at the task preview for any `request_help` prompts.
+</Accordion>
+
+<Accordion title="No request_help prompt appears">
+  - Confirm the execution log shows a `request_help` call.
+  - Ensure the extension has not disabled the human-help feature.
+  - The confirmation prompt requires a normal HTTP(S) page — extension settings pages cannot host it.
+</Accordion>

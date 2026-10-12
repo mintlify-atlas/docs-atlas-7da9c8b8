@@ -1,0 +1,99 @@
+---
+title: "Chrome Extension: Clip Web Pages to Knowledge"
+sidebarTitle: "Chrome Extension"
+description: "Install the WeKnora Chrome/Edge extension to ask questions from a sidebar, clip selected text, AI-extracted article body, or whole pages directly into any knowledge base."
+---
+
+The WeKnora Knowledge Assistant browser extension brings your knowledge bases into the browser. From the sidebar you can query any knowledge base while reading a page, clip content directly from the web without copy-pasting, and jot quick Markdown notes that go straight into a KB. The extension works in Chrome and Edge (and other Chromium-based browsers).
+
+## What It Does
+
+| Capability | Details |
+|---|---|
+| **Knowledge Base Q&A** | Side-panel chat interface, switch between multiple KBs, three answer modes: Quick, Deep, and Precise. Ask without leaving the current tab. |
+| **Web Page Clipping** | Save the page URL with AI-extracted article body, or frame-select a region of the page. Content is written to the chosen knowledge base. |
+| **Markdown Quick-Note** | Built-in editor for freeform notes, saved directly to a KB. |
+| **Keyboard Shortcuts** | Customizable shortcuts for opening the sidebar, submitting questions, and clipping. |
+
+## Setup
+
+<Steps>
+  <Step title="Get your API credentials">
+    In WeKnora, open **Settings → Integrations → API Integration**. Copy the **API Key** and the **API URL** for your instance.
+
+    Create a dedicated key for the extension and grant it the capabilities you need:
+    - `retrieve` — required for Q&A
+    - `ingest` and `manage_kbs` — required for clipping content into KBs
+
+    See [Auth & RBAC](/admin/tenants-auth) for capability details.
+  </Step>
+  <Step title="Fix the port (desktop app only)">
+    If you are running the WeKnora desktop application, set a fixed port in **Settings → Integrations → API Integration**. The desktop app picks a random port on each launch; without a fixed port the extension will lose its connection after every restart.
+  </Step>
+  <Step title="Install the extension">
+    Install from the Chrome Web Store:
+
+    **[Chrome Web Store — Knowledge Assistant](https://chromewebstore.google.com/detail/jpemjbopikggjlmikmclgbmkhhopjdgd)**
+
+    For Edge, the same extension page works in Edge's Chrome Web Store compatibility mode.
+  </Step>
+  <Step title="Connect the extension to your WeKnora instance">
+    1. Open the extension from the browser toolbar.
+    2. Go to **Extension Settings**.
+    3. Select **Enterprise / Developer** mode.
+    4. Paste the API URL and API Key you copied in step 1.
+    5. Save.
+  </Step>
+  <Step title="Verify the connection">
+    After saving, the extension should list your knowledge bases. Open a web page and ask a question from the sidebar — you should see an answer drawn from your KB content.
+  </Step>
+</Steps>
+
+<Tip>
+The integration setup page inside WeKnora at **Settings → Integrations → Chrome Extension** shows connection instructions tailored to your current instance URL.
+</Tip>
+
+## Clipping Content
+
+The extension supports three ways to save web content to a knowledge base:
+
+<Tabs>
+  <Tab title="AI Article Extraction">
+    Click the **Clip Page** button. The extension sends the page URL to WeKnora, which fetches and parses the page server-side using AI to extract the main article body, stripping navigation, ads, and boilerplate. The extracted text is indexed in the selected KB.
+  </Tab>
+  <Tab title="Region Selection">
+    Hold down the clip shortcut (configurable) and drag to select a region of the page. Only the selected text and images are saved — useful when a page has multiple articles or you only need one section.
+  </Tab>
+  <Tab title="Markdown Note">
+    Open the **Quick Note** panel from the extension toolbar. Type or paste Markdown and click Save. The note is stored as a knowledge entry in the selected KB — no page URL required.
+  </Tab>
+</Tabs>
+
+All clipped content is processed asynchronously. After saving, open the knowledge base document list to watch the parse status (`processing` → `completed`).
+
+## Troubleshooting
+
+<Accordion title="Extension cannot connect">
+  - Confirm the API URL is reachable from the machine running the browser. Container-internal addresses (`localhost` from inside Docker) are not accessible from the host browser.
+  - If using the desktop app, verify you have set a fixed port.
+  - Test the URL directly: `curl https://<your-api-url>/health` should return `{"status":"ok"}`.
+</Accordion>
+
+<Accordion title="401 / 403 errors">
+  - Check that the API Key has not been revoked.
+  - Verify the key's capabilities include `retrieve` (for Q&A) and `ingest` (for clipping).
+  - If the key has a KB allow-list, confirm the target knowledge base is on that list.
+</Accordion>
+
+<Accordion title="Clipped content not appearing in the KB">
+  - Open the knowledge base document list and check the document's **parse status**.
+  - `processing` means the document is still being parsed — wait a moment and refresh.
+  - `failed` means parsing encountered an error — open the document detail for the error message.
+</Accordion>
+
+## Related
+
+- [Auth & RBAC — API Key capabilities](/admin/tenants-auth)
+- [Document ingestion pipeline](/architecture/document-pipeline)
+- [Local Browser — let agents control your browser](/clients/local-browser)
+- [CLI — terminal access to the same API](/clients/cli)

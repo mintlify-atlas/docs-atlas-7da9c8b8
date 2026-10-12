@@ -1,72 +1,125 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "WeKnora",
+  "theme": "maple",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#101f38",
+    "light": "#a1a8ab",
+    "dark": "#2f3a48"
   },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
+  "favicon": "https://media.brand.dev/a38206fc-7cf8-4d09-b529-ce03181e55e9.png",
   "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
+    "light": "https://media.brand.dev/503727b0-422f-41d8-87aa-0b30e2f65de7.png",
+    "dark": "https://media.brand.dev/503727b0-422f-41d8-87aa-0b30e2f65de7.png"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:support@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/Tencent/WeKnora"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/Tencent/WeKnora"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation",
+              "configuration",
+              "troubleshooting"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/rag-pipeline",
+              "architecture/document-pipeline",
+              "architecture/async-tasks"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/knowledge-base",
+              "features/document-parsing",
+              "features/retrieval",
+              "features/agent",
+              "features/wiki",
+              "features/skills-sandbox"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/models",
+              "integrations/data-sources",
+              "integrations/im-channels",
+              "integrations/mcp",
+              "integrations/web-search",
+              "integrations/storage-backends"
+            ]
+          },
+          {
+            "group": "Administration",
+            "pages": [
+              "admin/tenants-auth",
+              "admin/observability",
+              "admin/platform-admin"
+            ]
+          },
+          {
+            "group": "Clients",
+            "pages": [
+              "clients/cli",
+              "clients/go-sdk",
+              "clients/chrome-extension",
+              "clients/embed-widget",
+              "clients/local-browser"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "development/dev-guide",
+              "development/extension-points",
+              "development/sandbox-deployment"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Resources",
+            "pages": [
+              "api/knowledge-bases",
+              "api/chat-sessions",
+              "api/agents",
+              "api/channels",
+              "api/models",
+              "api/tenants"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

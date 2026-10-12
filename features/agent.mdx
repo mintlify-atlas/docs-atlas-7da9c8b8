@@ -1,0 +1,203 @@
+---
+title: "Agent Engine: Multi-Step Reasoning with Tools"
+sidebarTitle: "Agent"
+description: "WeKnora's ReAct agent supports quick Q&A and smart reasoning modes, MCP tools with human-in-the-loop approval, persistent skills, long-term memory, and conversation control features."
+---
+
+The WeKnora agent engine lets you build assistants that combine knowledge base retrieval, web search, external tools, and code execution to handle multi-step tasks. Unlike a simple RAG pipeline, the agent operates as a ReAct loop: it reasons about the task, selects and executes tools, observes results, and continues iterating until it can produce a grounded final answer.
+
+## Quick Q&A vs Smart Reasoning
+
+Two modes are available from the conversation selector and in the agent editor:
+
+| Feature | Quick Q&A (`quick-answer`) | Smart Reasoning (`smart-reasoning`) |
+| --- | --- | --- |
+| Execution | Single RAG pipeline: retrieve → context assembly → one LLM call | ReAct loop: iterative tool calls with reasoning steps |
+| Best for | Fact lookup from documents | Cross-document analysis, web search, code execution |
+| Tool calls | None (pipeline-only) | Any registered tool; can call multiple tools in parallel |
+| Max iterations | N/A | Configurable (default 10, built-in agents up to 50) |
+| Multi-turn history | Configurable `history_turns` | Full context window; `history_turns` is ignored |
+| Sandbox / skills | Not available | Available when a sandbox config is selected |
+| Conversation steering | Not available | Append requirements to a running answer |
+
+## Creating a Custom Agent
+
+<Steps>
+  <Step title="Navigate to the Agents page">
+    Open **Agents** in the sidebar and click **New Agent**.
+  </Step>
+  <Step title="Choose a mode and type preset">
+    Select **Quick Q&A** or **Smart Reasoning**. For Smart Reasoning, pick a type preset to pre-fill the form—available presets include `rag-qa`, `wiki-qa`, `hybrid-rag-wiki`, `data-analysis`, and `custom`.
+  </Step>
+  <Step title="Configure model and knowledge scope">
+    Choose a language model, an optional rerank model, and set the knowledge base selection mode to **All**, **Selected KBs**, or **None**.
+  </Step>
+  <Step title="Enable tools">
+    Toggle **Web Search**, select **MCP services**, and choose a **Sandbox Config** if you need skills and code execution. Set the `allowed_tools` list or use the preset defaults.
+  </Step>
+  <Step title="Set system prompt and behavior">
+    Write a system prompt (or reference a template with `system_prompt_id`), set temperature, `max_iterations`, `reasoning_effort`, and `max_completion_tokens`.
+  </Step>
+  <Step title="Save and test">
+    Save the agent and start a conversation. Verify tool calls appear in the reasoning steps panel and that sources are correctly cited.
+  </Step>
+</Steps>
+
+## Built-in Agents
+
+WeKnora ships several built-in agents that can be used immediately without configuration:
+
+| Agent ID | Name | Mode / Type | Key Configuration |
+| --- | --- | --- | --- |
+| `builtin-quick-answer` | Quick Q&A | `quick-answer` | FAQ priority, query expansion + rewrite, web search on, 5 results |
+| `builtin-smart-reasoning` | Smart Reasoning | `smart-reasoning` / `rag-qa` | `max_iterations: 50`; tools: search, read, list, graph query; web search on |
+| `builtin-data-analyst` | Data Analyst | `smart-reasoning` / `data-analysis` | temperature 0.3; tools: `data_schema` + `data_analysis` (DuckDB); CSV/XLSX only; web search off |
+| `builtin-wiki-researcher` | Wiki Q&A | `smart-reasoning` / `wiki-qa` | tools: wiki_search, wiki_read_page, read_document, wiki_flag_issue; web search off |
+| `builtin-wiki-fixer` | Wiki Editor | `smart-reasoning` / `custom` | 9 wiki tools including write/rename/delete; `retain_retrieval_history: true` |
+
+## Tool Scope and Available Tools
+
+The agent's `allowed_tools` list determines which tools are registered. Key tools include:
+
+<CardGroup cols={2}>
+  <Card title="Knowledge Base Tools" icon="database">
+    `search_knowledge` (hybrid/semantic/keyword), `read_document` (paginated with context), `list_documents`, `query_knowledge_graph`
+  </Card>
+  <Card title="Web Tools" icon="globe">
+    `web_search` (Brave, Serply, and others), `web_fetch` (SSRF-safe browser rendering, up to 8 URLs in parallel)
+  </Card>
+  <Card title="Wiki Tools" icon="book">
+    `wiki_search`, `wiki_read_page`, `wiki_write_page`, `wiki_replace_text`, `wiki_rename_page`, `wiki_delete_page`, `wiki_flag_issue`
+  </Card>
+  <Card title="Sandbox Tools" icon="terminal">
+    `shell_exec` (in-sandbox command execution), `read_file`, `write_sandbox_file`, `edit_sandbox_file`, `list_sandbox_files`
+  </Card>
+  <Card title="Data Analysis Tools" icon="chart-bar">
+    `data_schema` (column info + row count), `data_analysis` (DuckDB SQL on CSV/Excel, always as table `dataset`)
+  </Card>
+  <Card title="MCP Tools" icon="plug">
+    `discover_mcp_tools`, `call_mcp_tool`, plus dynamically registered `mcp_*` tools from configured MCP services
+  </Card>
+</CardGroup>
+
+<Note>
+`web_search` and `search_memory` are **not** controlled by the `allowed_tools` whitelist. They are injected based on the agent's web-search and memory switches respectively, and removed from the whitelist before injection.
+</Note>
+
+### Tool Registration Rules
+
+1. The `allowed_tools` whitelist is normalized (old tool names like `knowledge_search` → `search_knowledge` are updated automatically).
+2. If no knowledge retrieval scope exists, all KB, Wiki, and data tools are removed.
+3. Web and memory tools are injected based on their respective switches.
+4. **Hard safety net**: tools are removed if the knowledge base scope lacks the required capabilities (e.g., `wiki_search` is removed if no Wiki-indexed KB is in scope).
+
+## Long-Term Memory
+
+When memory is enabled for a workspace, the agent maintains persistent facts about the user across sessions. Memory is scoped per workspace and per caller identity (web user, IM user, or embed visitor).
+
+<Tabs>
+  <Tab title="Memory Types">
+    | Type | Description |
+    | --- | --- |
+    | Profile | User's name, role, organization, and other identity facts |
+    | Preferences | Communication style, output format, language preferences |
+    | Facts | Stable factual assertions about the user's domain |
+    | Topics / Interests | Recurring themes promoted to long-term interests after appearing in 3+ sessions |
+    | Document affinity | Documents repeatedly referenced by the user |
+  </Tab>
+  <Tab title="Write Modes">
+    | Mode | Behavior |
+    | --- | --- |
+    | `explicit_only` | Only records memory when the user explicitly asks to remember something |
+    | `auto` | Additionally extracts memory from conversations in the background after a configurable delay (default 90 seconds) |
+  </Tab>
+</Tabs>
+
+Individual agents can set `memory_enabled = false` to disable memory read/write for that specific agent, overriding the workspace setting.
+
+## Conversation Control
+
+Smart Reasoning mode provides several conversation management features:
+
+<Accordion title="Append Requirements (Steering)">
+  While an answer is being generated, type in the input box and press **⌘ Enter** (Mac) or **Alt + Enter** to inject the message immediately into the running task. The agent reads it at its next step. Regular **Enter** queues the message to be sent after the current answer completes. Up to 10 messages can be queued per turn.
+</Accordion>
+
+<Accordion title="Fork (Branch Conversation)">
+  Creates a new session based on the current conversation up to a chosen message. The original session is preserved. The fork carries the sandbox workspace checkpoint from the branch point.
+
+  ```http
+  POST /api/v1/sessions/:session_id/fork
+  ```
+</Accordion>
+
+<Accordion title="Rewind (Roll Back)">
+  Deletes all messages after a chosen message in the current session. The corresponding sandbox workspace is also rolled back to the checkpoint for the last retained turn.
+
+  ```http
+  POST /api/v1/sessions/:session_id/rewind
+  ```
+</Accordion>
+
+<Accordion title="Reasoning Effort">
+  The `reasoning_effort` field controls thinking depth per turn: `off`, `auto`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. The agent configuration sets the default; individual turns can override it via the `reasoning_effort` field in the chat request, or using the **Thinking Intensity** selector in the input bar.
+</Accordion>
+
+## MCP Tool Approval Workflow
+
+MCP tools that require human review trigger an approval card in the conversation before execution. This is the only tool type subject to approval—built-in tools are never gated.
+
+<Steps>
+  <Step title="Approval requested">
+    The agent emits an `EventToolApprovalRequired` event containing the service name, tool name, parameters, and a timeout (default 10 minutes). The conversation UI shows an approval card.
+  </Step>
+  <Step title="User reviews">
+    The user can **approve** (optionally modifying parameters), **reject**, or let the request time out. The modified parameters are used if the user edits and approves.
+  </Step>
+  <Step title="Agent continues">
+    An approved decision triggers tool execution with any modified arguments. A rejected, timed-out, or cancelled decision is returned to the agent as a tool failure result—the agent can then adapt its reasoning.
+  </Step>
+</Steps>
+
+<Note>
+If the approval checker itself errors (e.g., database unavailable), WeKnora defaults to **requiring approval** (fail-close). Set `WEKNORA_AGENT_TOOL_APPROVAL_FAIL_OPEN=true` to revert to the permissive behavior.
+</Note>
+
+MCP services requiring OAuth authorization can complete the OAuth flow inside the conversation. After successful authorization, WeKnora automatically retries the tool call.
+
+## Sharing Agents via Organization
+
+Agents can be shared with organizations, giving members read-only access to the agent's capabilities:
+
+- Only the agent's owner tenant can share it.
+- Shared agents are **read-only**: recipients cannot modify configuration or view the system prompt.
+- When a recipient uses the agent, retrieval and model calls run in the **owner's tenant context**—the owner's knowledge bases are accessible, but the recipient's own MCP @mentions are restricted to the agent's preset selection.
+- Conversation records are written to the **recipient's** session store, not the owner's.
+
+```http
+POST /api/v1/agents/:agent_id/shares
+{
+  "organization_id": "org-abc123",
+  "permission": "viewer"
+}
+```
+
+## Key Configuration Fields
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `agent_mode` | `quick-answer` | `quick-answer` or `smart-reasoning` |
+| `max_iterations` | `10` | Maximum ReAct iterations (negative = unlimited, hard cap 100) |
+| `llm_call_timeout` | `120s` | Seconds of consecutive silence before a model call is cancelled |
+| `temperature` | `0.7` | Sampling temperature |
+| `max_completion_tokens` | `4096` (smart) | Max output tokens; auto-raised to 8192 when a sandbox is bound |
+| `reasoning_effort` | unset | Default thinking intensity: `off` / `auto` / `minimal` → `max` |
+| `mcp_selection_mode` | — | `all`, `selected`, or `none` |
+| `skills_selection_mode` | — | `all`, `selected`, or `none` |
+| `memory_enabled` | `null` (inherit) | `false` to disable memory for this agent |
+| `kb_selection_mode` | `all` | `all`, `selected`, or `none` |
+| `web_search_enabled` | `false` | Enable web search |
+| `web_search_max_results` | `5` | Number of web results to return |
+| `embed_top_k` | `10` | Retrieval candidate count |
+| `vector_threshold` | `0.5` | Minimum vector similarity score |
+| `rerank_top_k` | `5` | Number of results after reranking |

@@ -1,0 +1,318 @@
+---
+title: "Knowledge Base and Document API Reference"
+sidebarTitle: "Knowledge Bases"
+description: "CRUD for knowledge bases, document upload via file/URL/manual, parse status polling, hybrid retrieval search, and cross-KB copy and move operations."
+---
+
+The Knowledge Base API is the foundation of WeKnora's RAG pipeline. A knowledge base (KB) holds documents that are automatically parsed, chunked, embedded, and indexed for retrieval. You create a KB first, then import documents into it using one of three methods: file upload, URL ingestion, or manual Markdown content. Once documents reach `completed` parse status they are available for search.
+
+**Permission quick reference:** Read operations require Viewer+ role and read access to the KB (own / org-shared / visible via a shared Agent). Write operations require the KB creator or Admin+, and write access to the KB. For API Keys: reads need `retrieve`, document writes need `ingest`, and KB lifecycle operations need `manage_kbs`.
+
+---
+
+## Create a Knowledge Base
+
+<ParamField body="name" type="string" required>
+  Display name for the knowledge base.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Optional description.
+</ParamField>
+
+<ParamField body="type" type="string" default="document">
+  Knowledge base type: `document`, `faq`, or `wiki`.
+</ParamField>
+
+<ParamField body="embedding_model_id" type="string">
+  ID of the embedding model to use for vector indexing.
+</ParamField>
+
+<ParamField body="chunking_config" type="object">
+  <Expandable title="Chunking configuration fields">
+    <ParamField body="chunk_size" type="integer">Target chunk size in characters.</ParamField>
+    <ParamField body="chunk_overlap" type="integer">Overlap between adjacent chunks.</ParamField>
+    <ParamField body="separators" type="array">List of separator strings for recursive splitting.</ParamField>
+    <ParamField body="strategy" type="string">Chunking strategy: `auto`, `heading`, `heuristic`, `recursive`, or `legacy`.</ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="vector_store_id" type="string">
+  ID of a pre-configured vector store to bind. Returns error code 2200/2201 if invalid or unavailable.
+</ParamField>
+
+```bash
+curl -X POST $BASE/api/v1/knowledge-bases \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Product Docs","type":"document","embedding_model_id":"m-embed-1"}'
+```
+
+**Response:** `201 {"success":true,"data":{KnowledgeBase}}`
+
+---
+
+## List Knowledge Bases
+
+`GET /api/v1/knowledge-bases`
+
+<ParamField query="page" type="integer" default="1">Page number.</ParamField>
+<ParamField query="page_size" type="integer" default="20">Items per page (max 100).</ParamField>
+<ParamField query="creator" type="string">Filter by `mine` or `others`.</ParamField>
+<ParamField query="agent_id" type="string">Return only KBs visible to this shared agent.</ParamField>
+
+```bash
+curl "$BASE/api/v1/knowledge-bases?page=1&page_size=20" \
+  -H "X-API-Key: $API_KEY"
+```
+
+---
+
+## Get / Update / Delete a Knowledge Base
+
+```bash
+# Get
+curl $BASE/api/v1/knowledge-bases/kb-1 -H "Authorization: Bearer $TOKEN"
+
+# Update (name is required)
+curl -X PUT $BASE/api/v1/knowledge-bases/kb-1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Product Docs v2","description":"Updated description"}'
+
+# Delete
+curl -X DELETE $BASE/api/v1/knowledge-bases/kb-1 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+## Upload a Document
+
+`POST /api/v1/knowledge-bases/:id/knowledge/file`
+
+Accepts `multipart/form-data`. The document is parsed and indexed asynchronously; poll `parse_status` on the returned Knowledge object to track progress.
+
+<ParamField body="file" type="file" required>
+  The file to upload.
+</ParamField>
+
+<ParamField body="fileName" type="string">
+  Custom filename or a relative path such as `docs/spec/design.md`. The directory portion creates a folder hierarchy inside the KB.
+</ParamField>
+
+<ParamField body="tag_ids" type="string">
+  Comma-separated tag IDs to apply.
+</ParamField>
+
+<ParamField body="enable_multimodel" type="boolean">
+  Enable multimodal (VLM) processing for images in the document.
+</ParamField>
+
+<ParamField body="process_config" type="string">
+  JSON-encoded `KnowledgeProcessOverrides` to override per-upload parse settings (chunking, parser engine, summary generation, etc.).
+</ParamField>
+
+```bash
+curl -X POST $BASE/api/v1/knowledge-bases/kb-1/knowledge/file \
+  -H "X-API-Key: $API_KEY" \
+  -F 'file=@./manual.pdf' \
+  -F 'enable_multimodel=true'
+```
+
+Upload to a specific folder:
+
+```bash
+curl -X POST $BASE/api/v1/knowledge-bases/kb-1/knowledge/file \
+  -H "X-API-Key: $API_KEY" \
+  -F 'file=@./design.md' \
+  -F 'fileName=docs/spec/design.md'
+```
+
+<Note>
+  Uploading a duplicate file returns HTTP 409 with the existing Knowledge object in `data`. Files currently being deleted or that previously failed parsing are not considered duplicates.
+</Note>
+
+---
+
+## Ingest from a URL
+
+`POST /api/v1/knowledge-bases/:id/knowledge/url`
+
+<ParamField body="url" type="string" required>URL to fetch and ingest.</ParamField>
+<ParamField body="file_name" type="string">Override the filename.</ParamField>
+<ParamField body="tag_ids" type="array">List of tag IDs.</ParamField>
+
+```bash
+curl -X POST $BASE/api/v1/knowledge-bases/kb-1/knowledge/url \
+  -H "X-API-Key: $API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com/docs/overview"}'
+```
+
+---
+
+## List Documents in a KB
+
+`GET /api/v1/knowledge-bases/:id/knowledge`
+
+<ParamField query="parse_status" type="string">
+  Filter by status: `pending`, `processing`, `completed`, or `failed`.
+</ParamField>
+
+<ParamField query="keyword" type="string">Fuzzy-match on filename or title.</ParamField>
+
+<ParamField query="folder_path" type="string">
+  Filter to a specific folder. Pass an empty string for the KB root. Omit to return all folders.
+</ParamField>
+
+<ParamField query="folder_recursive" type="boolean">
+  When combined with `folder_path`, include documents in sub-folders.
+</ParamField>
+
+<ParamField query="sort_by" type="string" default="created_at">
+  Sort field: `created_at`, `updated_at`, or `file_name`.
+</ParamField>
+
+<ParamField query="sort_order" type="string" default="desc">
+  `asc` or `desc`.
+</ParamField>
+
+```bash
+curl "$BASE/api/v1/knowledge-bases/kb-1/knowledge?parse_status=completed&page=1" \
+  -H "X-API-Key: $API_KEY"
+```
+
+---
+
+## Hybrid Search (Retrieval)
+
+`POST /api/v1/knowledge-bases/:id/hybrid-search`
+
+This is the lower-level retrieval endpoint that returns raw recall scores. For production RAG pipelines, consider `POST /api/v1/knowledge-search` which applies reranking by default. Use this endpoint when you need to inspect raw recall results, supply a pre-computed embedding, or run evaluation benchmarks.
+
+<ParamField body="query_text" type="string">
+  Query text. Required unless `query_embedding` is provided.
+</ParamField>
+
+<ParamField body="query_embedding" type="array">
+  Pre-computed query vector. Disables keyword matching when used alone.
+</ParamField>
+
+<ParamField body="match_count" type="integer" default="50">
+  Maximum number of results to return.
+</ParamField>
+
+<ParamField body="vector_threshold" type="number">
+  Minimum cosine similarity score for vector matches.
+</ParamField>
+
+<ParamField body="keyword_threshold" type="number">
+  Minimum BM25 score for keyword matches.
+</ParamField>
+
+<ParamField body="disable_keywords_match" type="boolean">
+  Skip keyword (BM25) retrieval.
+</ParamField>
+
+<ParamField body="disable_vector_match" type="boolean">
+  Skip vector retrieval.
+</ParamField>
+
+<ParamField body="knowledge_base_ids" type="array">
+  Search across multiple KBs simultaneously. The path `:id` must be included. All specified KBs must use the same embedding model.
+</ParamField>
+
+<ParamField body="tag_ids" type="array">
+  Restrict results to documents with these tags (OR logic).
+</ParamField>
+
+<ParamField body="rerank" type="object">
+  <Expandable title="Rerank configuration">
+    <ParamField body="enabled" type="boolean" default="true">Set to `false` to skip reranking.</ParamField>
+    <ParamField body="model_id" type="string">Rerank model ID. Defaults to the workspace rerank model.</ParamField>
+    <ParamField body="top_k" type="integer">Maximum results to keep after reranking.</ParamField>
+    <ParamField body="threshold" type="number">Minimum rerank score (default: workspace config, typically 0.2).</ParamField>
+  </Expandable>
+</ParamField>
+
+```bash
+curl -X POST "$BASE/api/v1/knowledge-bases/kb-1/hybrid-search?resource_urls=public" \
+  -H "X-API-Key: $API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"query_text":"refund process","match_count":5}'
+```
+
+With reranking enabled:
+
+```bash
+curl -X POST $BASE/api/v1/knowledge-bases/kb-1/hybrid-search \
+  -H "X-API-Key: $API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "query_text": "refund process",
+    "match_count": 20,
+    "rerank": {"model_id": "rr-1", "top_k": 5, "threshold": 0.2}
+  }'
+```
+
+**Response:**
+
+<ResponseField name="success" type="boolean">Always `true` on success.</ResponseField>
+<ResponseField name="data" type="array">
+  Array of `SearchResult` objects.
+  <Expandable title="SearchResult fields">
+    <ResponseField name="id" type="string">Chunk ID.</ResponseField>
+    <ResponseField name="content" type="string">Chunk text content.</ResponseField>
+    <ResponseField name="knowledge_id" type="string">Parent document ID.</ResponseField>
+    <ResponseField name="knowledge_title" type="string">Parent document title.</ResponseField>
+    <ResponseField name="score" type="number">Retrieval score.</ResponseField>
+    <ResponseField name="knowledge_base_id" type="string">Owning knowledge base ID.</ResponseField>
+    <ResponseField name="source_locators" type="array">Location of this chunk within the original file (page, bbox, slide, row range, etc.).</ResponseField>
+  </Expandable>
+</ResponseField>
+<ResponseField name="meta.rerank" type="object">
+  Present when `rerank` was passed. Includes `applied`, `outcome`, `model_id`, `threshold`, `top_score`, `candidate_count`, `result_count`.
+</ResponseField>
+
+---
+
+## Copy a Knowledge Base
+
+`POST /api/v1/knowledge-bases/copy`
+
+Copies all content from one KB to another asynchronously. If no `target_id` is given, a new KB is created automatically.
+
+<ParamField body="source_id" type="string" required>Source KB ID.</ParamField>
+<ParamField body="target_id" type="string">Destination KB ID. Omit to auto-create.</ParamField>
+<ParamField body="task_id" type="string">Optional client-supplied idempotency key.</ParamField>
+
+```bash
+curl -X POST $BASE/api/v1/knowledge-bases/copy \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"source_id":"kb-1","target_id":"kb-2"}'
+```
+
+Poll progress at `GET /api/v1/knowledge-bases/copy/progress/:task_id`.
+
+---
+
+## Delete a Document
+
+```bash
+curl -X DELETE $BASE/api/v1/knowledge/k-1 \
+  -H "X-API-Key: $API_KEY"
+```
+
+Deletion is asynchronous. The response includes a `task_id` you can track.
+
+## Batch Operations
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/v1/knowledge/batch-reparse` | Reparse multiple documents (pass `kb_id` and `ids`) |
+| `POST /api/v1/knowledge/batch-delete` | Delete up to 200 documents (pass `kb_id` and `ids`) |
+| `POST /api/v1/knowledge-bases/:id/knowledge/batch-download` | Download up to 200 original files as a ZIP (up to 512 MiB) |
+| `POST /api/v1/knowledge/move` | Move documents across KBs asynchronously |
+| `POST /api/v1/knowledge/folder` | Reclassify documents into a folder without re-parsing |

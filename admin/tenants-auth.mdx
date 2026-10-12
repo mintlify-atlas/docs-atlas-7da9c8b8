@@ -1,0 +1,244 @@
+---
+title: "Workspaces, RBAC, and Authentication in WeKnora"
+sidebarTitle: "Auth & RBAC"
+description: "Multi-workspace isolation with four roles (Owner/Admin/Contributor/Viewer), scoped API keys with fine-grained capabilities, OIDC SSO, and AES-256-GCM credential encryption."
+---
+
+WeKnora organizes every resource—knowledge bases, models, agents, sessions, and storage quotas—inside a **workspace** (internally called a `Tenant`). A single user account can join multiple workspaces with different roles in each. An organization layer lets separate workspaces share knowledge bases and agents without merging them into one space.
+
+## Workspace Model
+
+Each workspace is an independent resource and permission boundary. Workspaces are identified by a numeric `id` and carry their own storage quota (default 10 GB), vector-store bindings, model configurations, and integration settings. When a user registers with the default tenant mode (`create_personal`), a personal workspace is auto-provisioned; with `tenantless` mode the user waits for an invitation.
+
+<CardGroup cols={2}>
+  <Card title="Invite Members" icon="user-plus">
+    **Settings → Members → Invite** — assign a role when sending the invite. Invitees can register with a shared link or accept via their inbox.
+  </Card>
+  <Card title="Share a KB Across Teams" icon="share-nodes">
+    Create an **Organization**, add both workspaces, then share the knowledge base or agent into that organization.
+  </Card>
+  <Card title="Grant API Access" icon="key">
+    **Settings → API Keys** — choose capabilities and optionally restrict to specific knowledge bases.
+  </Card>
+  <Card title="Platform-Wide Admin" icon="shield-halved">
+    System-admin identity is separate from workspace Owner. See [Platform Administration](/admin/platform-admin).
+  </Card>
+</CardGroup>
+
+## Four Workspace Roles
+
+Roles are stored in the `TenantMember` table. Each role has a numeric level used for `HasPermission` comparisons.
+
+| Role | Level | What it can do |
+|---|---|---|
+| **Owner** | 40 | Full control: delete workspace, transfer ownership, manage API keys, manage all members and invitations. Includes everything below. |
+| **Admin** | 30 | Configure tenant infrastructure (models, vector stores, MCP, IM channels, web search, storage backends, data sources). Modify or delete any resource regardless of creator. |
+| **Contributor** | 20 | Create knowledge bases and agents. Edit or delete resources **they created**. Cannot touch resources created by others. |
+| **Viewer** | 10 | Read-only access. Can create sessions and ask questions but cannot create KBs or agents. |
+
+<Note>
+Member add/remove/role-change and invitation management are **Owner-only** — Admin cannot perform these actions.
+</Note>
+
+<Note>
+Viewers can create sessions and submit questions. They cannot create knowledge bases or agents, but they are not blocked from all write operations.
+</Note>
+
+### Per-Resource Ownership
+
+Beyond role levels, three ownership guards further restrict who can mutate a resource:
+
+- **`OwnedKBOrAdmin`** — KB updates/deletes require the caller to be the KB creator OR an Admin+.
+- **`OwnedAgentOrAdmin`** — same pattern for agents (built-in agents have no creator; Admin+ only).
+- **`OwnedKnowledgeKBOrAdmin`** — knowledge documents / chunks / Wiki pages inherit their parent KB's creator check.
+
+### RBAC Enable/Disable
+
+RBAC enforcement can be toggled per workspace. The `WEKNORA_TENANT_ENABLE_RBAC` environment variable sets the deployment default. When `enable_rbac=false`, role checks are logged but never block requests — useful for a gradual rollout.
+
+```bash
+# Disable RBAC enforcement globally (log-only mode)
+WEKNORA_TENANT_ENABLE_RBAC=false
+```
+
+<Warning>
+The KB-access guard (`RequireKBAccess`) that enforces cross-workspace sharing boundaries is **always active** regardless of `enable_rbac`. Only intra-workspace role checks are affected by this toggle.
+</Warning>
+
+## Audit Log
+
+All member lifecycle events are recorded in the append-only `audit_logs` table. Events include:
+
+`rbac.member_added` · `rbac.member_removed` · `rbac.member_role_changed` · `rbac.member_left` · `rbac.invitation_sent` · `rbac.invitation_accepted` · `rbac.invitation_declined` · `rbac.invitation_revoked` · `rbac.access_denied`
+
+Access-denied entries use a 1-minute sliding-window deduplication (per route template + actor) to prevent a scanning client from flooding the table.
+
+Query workspace audit events at `GET /api/v1/tenants/:id/audit-log` (Admin+).
+
+## API Keys
+
+### Capabilities
+
+A workspace API key does **not** inherit any tenant role. Instead, each key carries an explicit `Capabilities` list. Routes that accept API keys use a default-deny policy — any route not explicitly declared in the policy registry rejects key-based requests.
+
+| Capability | Description |
+|---|---|
+| `retrieve` | Read / search knowledge base data (KB list, knowledge details, hybrid search) |
+| `chat` | Session flows: create session, knowledge-chat, agent-chat, load and delete messages |
+| `read_agents` | List and view agents (no create/modify) |
+| `ingest` | Write content: upload documents, edit chunks, FAQ, tags, Wiki, batch delete/move |
+| `manage_kbs` | KB lifecycle: create, copy, duplicate, update, delete, initialize config |
+| `manage_agents` | Agent CRUD and copy |
+| `message_history` | Search and view tenant-wide chat history (`POST /messages/search` etc.) |
+| `manage_models` | Manage model definitions and credentials |
+| `manage_mcp_services` | Manage MCP services and credentials |
+| `manage_datasources` | Manage data source connectors and sync tasks |
+| `manage_channels` | Manage Embed / IM channel integrations |
+| `manage_vector_stores` | Manage vector stores and parsers |
+| `manage_storage_backends` | Manage object storage backends |
+| `manage_web_search` | Manage web search configuration |
+| `run_evaluations` | Run and view evaluation tasks |
+| `manage_members` | Manage workspace members and invitations |
+| `manage_spaces` | Manage organization / shared-space memberships |
+| `manage_tenant_settings` | Read and write workspace integration settings |
+
+Platform-level keys (scope `platform`) additionally support:
+
+| Capability | Description |
+|---|---|
+| `system_tenants_read` / `system_tenants_manage` | Read / manage all workspaces |
+| `system_settings_read` / `system_settings_manage` | Read / write system settings |
+| `system_runtime_read` / `system_runtime_manage` | Read / manage runtime queues and tasks |
+| `system_audit_read` | Read platform-wide audit log |
+
+### KB Allow-List
+
+Set `KnowledgeBaseIDs` on a key to restrict it to specific knowledge bases. Any request that touches a KB outside this list returns `403`. Batch operations fail entirely if any single KB is out of scope.
+
+### Creating a Scoped API Key
+
+<Steps>
+  <Step title="Open API Key settings">
+    Navigate to **Settings → API Keys** inside your workspace.
+  </Step>
+  <Step title="Click Create Key">
+    Give the key a descriptive name (e.g., `ci-ingest-bot`).
+  </Step>
+  <Step title="Select capabilities">
+    Check only the capabilities your integration needs. For a document-ingestion pipeline, select `ingest` and `manage_kbs`. For a read-only retrieval service, select `retrieve`.
+  </Step>
+  <Step title="Restrict to specific knowledge bases (optional)">
+    Under **Knowledge Base Scope**, select one or more knowledge bases. Leave blank to allow access to all KBs the workspace owns.
+  </Step>
+  <Step title="Copy the key">
+    The plaintext key is shown exactly once. WeKnora stores only an AES-256-GCM-encrypted form and a lookup hash — the plaintext cannot be recovered after closing the dialog.
+  </Step>
+</Steps>
+
+You can also create a key via the API (requires Owner role or a platform key):
+
+```bash
+curl -X POST https://kb.example.com/api/v1/tenants/{tenant_id}/api-keys \
+  -H "Authorization: Bearer $JWT" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "ci-ingest-bot",
+    "capabilities": ["ingest", "manage_kbs"],
+    "knowledge_base_ids": ["kb-abc123"]
+  }'
+```
+
+Use the returned key in subsequent requests via the `X-API-Key` header:
+
+```bash
+curl https://kb.example.com/api/v1/knowledge-bases \
+  -H "X-API-Key: sk-..."
+```
+
+### Platform-Level API Keys
+
+Platform keys have `scope_type = "platform"` and `tenant_id = NULL`. They are created exclusively by system admins at **Settings → Platform API Keys** or via `POST /api/v1/system/admin/api-keys`. Platform keys cannot be created by other platform keys.
+
+## OIDC Single Sign-On
+
+WeKnora supports OpenID Connect for SSO login. Configure the provider in your deployment environment or YAML:
+
+| Config key | Env variable | Description |
+|---|---|---|
+| `oidc.enable` | — | Enable OIDC login |
+| `oidc.issuer_url` | — | Expected issuer (used in token validation) |
+| `oidc.jwks_uri` | `OIDC_AUTH_JWKS_URI` | JWKS endpoint for signature verification |
+| `oidc.discovery_url` | — | `.well-known/openid-configuration` URL |
+| `oidc.client_id` / `oidc.client_secret` | — | OAuth client credentials |
+| `oidc.provider_display_name` | — | Button label on the login page |
+| `oidc.scopes` | — | OAuth scopes (e.g. `openid email profile`) |
+| `oidc.user_info_mapping.username` / `.email` | — | Claims field mapping (default `name` / `email`) |
+
+The OIDC flow:
+
+<Steps>
+  <Step title="Frontend requests the authorization URL">
+    `GET /api/v1/auth/oidc/url` — backend generates a signed `state` containing a nonce and redirect URI (CSRF protection) and returns the IdP authorization URL.
+  </Step>
+  <Step title="User authenticates with the IdP">
+    The browser redirects to the identity provider. The nonce is stored in an HttpOnly cookie.
+  </Step>
+  <Step title="Callback and token exchange">
+    `GET /api/v1/auth/oidc/callback` — backend validates the `state` signature, exchanges the code for tokens, verifies the id_token using JWKS, and fetches user info.
+  </Step>
+  <Step title="User provisioned or matched">
+    WeKnora matches the OIDC identity to an existing user by email. If no match is found, a new account is auto-provisioned (`provisionOIDCUser`) with a random password and the user cannot log in via password.
+  </Step>
+  <Step title="Local JWT issued">
+    A standard WeKnora access token (24 h) and refresh token (7 d) are returned — identical to password login.
+  </Step>
+</Steps>
+
+<Tip>
+Enterprise portals can link directly to `GET /api/v1/auth/oidc/start` to trigger an immediate redirect to the IdP without the frontend making a separate URL-fetch request.
+</Tip>
+
+## External User Principal (API Principal)
+
+The `APIPrincipalConfig` on a workspace allows inbound API requests to carry an external user identity in one of two modes:
+
+- **`direct`** — the caller passes a `user_id` and `user_name` in request headers; the system trusts them as-is.
+- **`signed_token`** — the caller passes a JWT signed with a shared secret; the backend verifies the signature before accepting the identity.
+
+This is used for embedding WeKnora into an existing product where users already have identities managed elsewhere.
+
+## Credential Encryption
+
+All API key plaintexts stored in the database are protected by AES-256-GCM. The `SYSTEM_AES_KEY` environment variable must be set to enable this encryption. The `BeforeSave` GORM hook encrypts the value before writing; `AfterFind` decrypts on read. Queries always use the irreversible `KeyHash` column — the plaintext column is never used as a lookup key.
+
+```bash
+# Generate a secure AES key
+openssl rand -base64 32
+# Set it in your environment
+SYSTEM_AES_KEY=<your-base64-key>
+```
+
+<Warning>
+If `SYSTEM_AES_KEY` is not set, API key plaintexts are stored unencrypted in the database. Always configure this in production deployments.
+</Warning>
+
+## Registration Modes
+
+| Mode | Public registration | Register via invite link | Existing users accept invite |
+|---|---|---|---|
+| `self_serve` (default) | ✓ | ✓ | ✓ |
+| `invite_register` | ✗ | ✓ | ✓ |
+| `invite_only` | ✗ | ✗ | ✓ |
+
+The `DISABLE_REGISTRATION=true` environment variable maps to `invite_only`. The database `system_settings` value takes precedence over the environment variable at request time; use `DELETE /system/admin/settings/auth.registration_mode` to reset the database override.
+
+## Quick Reference
+
+| Config | Value | Default | Effect |
+|---|---|---|---|
+| `auth.registration_mode` | `self_serve` / `invite_register` / `invite_only` | `self_serve` | Password registration mode |
+| `auth.default_tenant_mode` | `create_personal` / `tenantless` | `create_personal` | Auto-create personal workspace on signup |
+| `WEKNORA_TENANT_ENABLE_RBAC` | `true` / `false` | `true` | Enforce RBAC / log-only |
+| `JWT_SECRET` | any string | random 32 bytes | JWT HMAC key (rotates on restart if unset) |
+| `SYSTEM_AES_KEY` | AES key | unset | Encrypt API key plaintexts at rest |
+| `FRONTEND_BASE_URL` | URL | relative | Invite link registration page |

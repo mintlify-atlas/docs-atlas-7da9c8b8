@@ -1,0 +1,226 @@
+---
+title: "Platform Administration and System Settings"
+sidebarTitle: "Platform Admin"
+description: "System admin controls for all workspaces: create and delete tenants, manage users, configure runtime settings, issue platform API keys, and read the global audit log."
+---
+
+WeKnora distinguishes two separate administrative identities: a **workspace Owner** who controls a single workspace, and a **system admin** who controls the entire deployment. Neither automatically implies the other — being Owner of a workspace does not make you a system admin, and system admins do not automatically inherit access to workspace contents.
+
+| | Workspace Owner | System Admin |
+|---|---|---|
+| Scope | Single workspace | Entire deployment |
+| Granted by | Creating the workspace, or transfer from current Owner | Another system admin; first admin via bootstrap env var |
+| Manages | Members, models, KBs, integrations, workspace audit | Global settings, task queues, platform API keys, cross-workspace audit, user passwords |
+| Cross-workspace data access | — | **Separate** flag: `CanAccessAllTenants` (not auto-granted with `IsSystemAdmin`) |
+
+## Bootstrapping the First System Admin
+
+A fresh deployment has no system admin. The bootstrap process promotes an existing account:
+
+<Steps>
+  <Step title="Register a normal account">
+    Sign up through the regular registration flow at `/register`.
+  </Step>
+  <Step title="Set the bootstrap env var">
+    Configure the app service with `WEKNORA_BOOTSTRAP_SYSTEM_ADMIN_EMAIL=<that-account-email>` and restart.
+  </Step>
+  <Step title="Server auto-promotes on startup">
+    On startup, if **no system admin exists yet**, WeKnora promotes the account matching that email. If the email is not registered, a warning is logged and the check runs again on next restart. The variable does nothing once a system admin already exists.
+  </Step>
+</Steps>
+
+<Warning>
+The bootstrap variable only promotes existing accounts — it does not create new users. Register the account first, then set the variable.
+</Warning>
+
+After the first admin is established, use the UI to add or revoke additional admins. You cannot revoke your own admin status, and you cannot revoke the last remaining system admin.
+
+Corresponding API endpoints:
+- `POST /api/v1/system/admin/promote` — grant system-admin status
+- `POST /api/v1/system/admin/revoke` — revoke system-admin status
+
+## Platform Admin Console
+
+System admins see additional sections at the bottom of **Settings**:
+
+<CardGroup cols={2}>
+  <Card title="System Settings" icon="sliders">
+    Global runtime switches: registration mode, workspace self-service, concurrency, SSRF whitelist, default storage quota. Changes persist to the database and override environment variables.
+  </Card>
+  <Card title="Model Catalog" icon="microchip">
+    View, edit, and bulk-import model definitions available to all workspaces. Changes take effect immediately.
+  </Card>
+  <Card title="Runtime Queues" icon="list-check">
+    Live task-queue dashboard: inspect backlogs, retry/archive/delete individual tasks, purge dead-letter queues. See [Observability](/admin/observability) for details.
+  </Card>
+  <Card title="Platform API Keys" icon="key">
+    Control-plane automation keys. Scoped separately from workspace keys. See below.
+  </Card>
+  <Card title="System Audit Log" icon="scroll">
+    Platform-level events (`tenant_id = 0`): settings changes, admin promotions/revocations, queue actions. Workspace-level audit is separate and tenant-scoped.
+  </Card>
+  <Card title="Version Info" icon="circle-info">
+    Deployment version, commit hash, and build date.
+  </Card>
+</CardGroup>
+
+### Workspace Management
+
+System admins can list all workspaces, inspect any workspace, and delete workspaces (soft-delete). The following API endpoints are available:
+
+```bash
+# List all workspaces
+GET /api/v1/system/admin/tenants
+
+# Get a specific workspace
+GET /api/v1/system/admin/tenants/:id
+
+# Delete a workspace
+DELETE /api/v1/system/admin/tenants/:id
+```
+
+### User Management
+
+System admins have additional user management capabilities not available to workspace owners:
+
+**Reset user password** — replaces the target user's local password and revokes all their sessions:
+
+```bash
+POST /api/v1/system/admin/users/reset-password
+```
+
+<Warning>
+System admins cannot reset their own password using this endpoint — self-service password changes still require the old password.
+</Warning>
+
+**Create users** (v0.8.2+) — available at **Settings → System Settings → Accounts & Access → Create User**. Fill in username (2–50 characters) and email, then choose auto-generated random password or set one manually. The auto-generated password is shown once and cannot be retrieved again.
+
+Every user creation writes a `system.user_created` audit event. If the email and username resolve to different existing users, the creation is rejected.
+
+**Apply default storage quota** — bulk-update all existing workspaces to the current default quota:
+
+```bash
+POST /api/v1/system/admin/tenants/apply-default-storage-quota
+```
+
+## Runtime Settings Reference
+
+Settings stored in the database take precedence over environment variables at request time. Most changes take effect immediately.
+
+<Accordion title="Authentication & Registration">
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `auth.registration_mode` | `self_serve` / `invite_only` | `self_serve` | Password registration mode (immediate) |
+| `auth.default_tenant_mode` | `create_personal` / `tenantless` | `create_personal` | Auto-create workspace on registration (affects new users only) |
+| `auth.complex_password_enabled` | bool | `false` | Require uppercase, lowercase, digit, and special character in new passwords |
+
+</Accordion>
+
+<Accordion title="Workspace Policies">
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `tenant.self_service_creation_enabled` | bool | `true` | Allow any user to create a new workspace |
+| `tenant.max_owned_per_user` | int | `10` | Max workspaces a user may own (0 = built-in default, negative = no limit) |
+| `tenant.default_storage_quota_gb` | int | `10` | Storage quota for **new** workspaces only (existing workspaces unaffected) |
+| `tenant.auto_create_api_key` | bool | `false` | Auto-create a full-access API key when a new workspace is created |
+| `tenant.auto_accept_invitation` | bool | `false` | Direct-add invited users without email confirmation |
+
+</Accordion>
+
+<Accordion title="Concurrency & Performance">
+
+| Key | Default | Description |
+|---|---|---|
+| `asynq.core_concurrency` | varies | Core pipeline worker count |
+| `asynq.postprocess_concurrency` | varies | Post-processing worker count |
+| `asynq.enrichment_concurrency` | varies | Enrichment worker count |
+| `asynq.maintenance_concurrency` | varies | Maintenance worker count |
+| `asynq.shared_concurrency` | varies | Shared queue worker count |
+| `asynq.wiki_concurrency` | varies | Wiki synthesis worker count |
+| `model.max_concurrency` | `32` | Max concurrent LLM requests |
+
+</Accordion>
+
+<Accordion title="Security">
+
+| Key | Default | Description |
+|---|---|---|
+| `ssrf.whitelist` | empty | Additional allowed outbound hostnames (overrides base SSRF rules) |
+| `sandbox.docker_enabled` | `false` | Enable Docker-based skill sandbox |
+
+</Accordion>
+
+<Tip>
+To reset a database-persisted setting and fall back to the environment variable or built-in default, use `DELETE /api/v1/system/admin/settings/:key`. Changes made in the UI cannot be undone by editing environment variables alone.
+</Tip>
+
+## Platform API Keys
+
+Platform API keys are scoped to `platform` (not tied to any workspace) and carry capabilities that control the management plane. Create them at **Settings → Platform API Keys** or via:
+
+```bash
+POST /api/v1/system/admin/api-keys
+```
+
+Request body:
+
+```json
+{
+  "name": "ci-platform-bot",
+  "capabilities": [
+    "system_tenants_read",
+    "system_settings_read",
+    "system_runtime_read",
+    "system_audit_read"
+  ]
+}
+```
+
+Platform key capabilities:
+
+| Capability | Access granted |
+|---|---|
+| `system_tenants_read` | List and inspect all workspaces |
+| `system_tenants_manage` | Create, update, and delete workspaces |
+| `system_settings_read` | Read system settings |
+| `system_settings_manage` | Write system settings |
+| `system_runtime_read` | View task queues and tasks |
+| `system_runtime_manage` | Retry, archive, delete, and cancel queue tasks |
+| `system_audit_read` | Read the platform audit log |
+
+<Note>
+Platform keys cannot create other platform keys. The `RequireSystemAdmin` middleware rejects workspace-scoped keys for all `/system/admin/*` endpoints — only platform keys or logged-in system admin JWTs are accepted.
+</Note>
+
+## Auto-Migrations
+
+WeKnora runs database migrations automatically on startup when `AUTO_MIGRATE=true` (the default). Migrations are version-stamped and idempotent. To inspect migration state or run migrations manually, set `AUTO_MIGRATE=false` and use the migration CLI.
+
+## Audit Log Scopes
+
+The audit log has two scopes:
+
+| Scope | Query endpoint | Who can access |
+|---|---|---|
+| **Workspace-level** — member changes, KB changes, knowledge operations | `GET /api/v1/tenants/:id/audit-log` | Workspace Admin+ |
+| **Platform-level** — settings changes, admin promotions, queue operations (`tenant_id = 0`) | `GET /api/v1/system/admin/audit-log` | System admin or platform key with `system_audit_read` |
+
+The platform audit log covers these action categories:
+
+- `system.setting_changed`
+- `system.admin_promoted` / `system.admin_revoked`
+- `system.user_created` / `system.user_password_reset`
+- `system.api_key_created` / `system.api_key_revoked`
+- `system.queue_task_retried` / `system.queue_task_deleted` / `system.queue_task_run_now` / `system.queue_task_cancelled` / `system.queue_archived_purged`
+
+## Implementation Reference
+
+| Component | Source path |
+|---|---|
+| Bootstrap (first system admin) | `cmd/server/bootstrap.go` |
+| Platform settings registry | `internal/application/service/system_setting.go` |
+| System admin handler | `internal/handler/system_admin.go` |
+| Platform settings UI config | `frontend/src/config/settingsAccess.ts` |
+| Runtime queue routes | `internal/router/routes_system.go` |

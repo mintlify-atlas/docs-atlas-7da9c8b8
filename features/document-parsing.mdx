@@ -1,0 +1,172 @@
+---
+title: "Document Parsing: Supported Formats and Config"
+sidebarTitle: "Document Parsing"
+description: "WeKnora supports 25+ file formats via the docreader gRPC microservice, with per-document parsing overrides, OCR and VLM image processing, and a visual parsing timeline."
+---
+
+Document parsing in WeKnora converts uploaded files into retrievable text and extracts raw image references. The heavy lifting is performed by **docreader**, an independent Python gRPC service that outputs Markdown plus image bytes. The Go application then handles chunking, image storage, OCR via a vision-language model, and vectorization. This separation means docreader contains zero OCR logic—all multimodal processing happens in the Go application tier.
+
+## Supported Formats
+
+| Category | Formats |
+| --- | --- |
+| Documents | PDF, Word (`.doc` / `.docx`), PowerPoint (`.ppt` / `.pptx`), Excel (`.xls` / `.xlsx`), EPUB, XMind |
+| Text | `.txt`, Markdown (`.md`), CSV, JSON |
+| Web | Online URL fetch, local HTML / MHTML archive |
+| Images | `.jpg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.webp` (requires a configured vision model to understand content) |
+| Audio | `.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg` (requires a configured speech-recognition model) |
+
+<Note>
+Plain text formats (`.md`, `.txt`, `.csv`, `.json`) and images and audio are handled natively by the Go application's `SimpleFormatReader` and never sent to the docreader service. Docreader handles the complex formats: PDF, DOCX, DOC, XLSX, XLS, PPTX, PPT, EPUB, HTML, MHTML, XMind, and web URL fetching.
+</Note>
+
+## The docreader gRPC Microservice
+
+`docreader` is a standalone Python service that exposes a pure gRPC interface (default port `50051`). It has no HTTP endpoints. Three RPCs are defined in `docreader/proto/docreader.proto`:
+
+```protobuf
+service DocReader {
+  rpc Read(ReadRequest) returns (ReadResponse) {}
+  // Streaming version: sends one meta frame first, then one frame per image.
+  // Avoids RESOURCE_EXHAUSTED errors for large scanned PDFs.
+  rpc ReadStream(ReadRequest) returns (stream ReadStreamResponse) {}
+  rpc ListEngines(ListEnginesRequest) returns (ListEnginesResponse) {}
+}
+```
+
+The Go application prefers `ReadStream`. If the docreader version does not support it (returns `Unimplemented`), it falls back to the unary `Read`. Inline image bytes are returned in `ImageRef.image_data`—the Go side is solely responsible for persisting images to the configured storage backend.
+
+### Parser Engines
+
+Three engines are registered in the docreader engine registry:
+
+| Engine | Supported File Types | Notes |
+| --- | --- | --- |
+| `builtin` | PDF, DOCX, DOC, XLSX, XLS, PPTX/PPT (via MarkItDown), EPUB, HTML, MHTML, XMind, images | Default engine for most formats |
+| `markitdown` | MD, PDF, DOCX, DOC, PPTX, PPT, XLSX, XLS, CSV | Microsoft MarkItDown library |
+| `opendataloader` | PDF only | Apache-licensed Java layout analysis; requires Java 11+ |
+
+If the requested engine does not support a file type, docreader automatically falls back to the `builtin` engine.
+
+### The anydoc In-Process Engine
+
+`anydoc` is an optional Go-side parser that links a Rust document-conversion library directly into the WeKnora main process via cgo. It supports: `doc`, `docx`, `docm`, `odt`, `rtf`, `ppt`, `pptx`, `pptm`, `odp`, `xls`, `xlsx`, `xlsm`, `ods`, `epub`, `csv`, `pdf`.
+
+Unlike docreader, anydoc requires no separate Python service, no cross-process communication, and no external binaries—making it suitable for lightweight deployments or latency-sensitive scenarios.
+
+```bash
+# Build with anydoc support
+make build-anydoc
+
+# Or skip the Rust toolchain
+docker build -f docker/Dockerfile.app --build-arg WITH_ANYDOC=0 -t weknora-app .
+```
+
+<Warning>
+The `anydoc` engine only extracts the text layer of PDFs. Scanned PDFs with no text layer will fail unless docreader (builtin) is also available, which handles per-page fallback to OCR.
+</Warning>
+
+## PDF Parsing in Depth
+
+The builtin PDF parser (`pdf_parser.py`) uses **per-page routing** to decide whether each page is a text page or a scanned page. The routing signal is image area coverage: if image bounding boxes cover ≥ 50% of the page area, the page is classified as scanned.
+
+**Pass 1 – Text extraction**: Text pages undergo geometric layout reconstruction (multi-column linearization, watermark removal, heading detection by font size). The Go application then performs OCR on scanned pages using the configured VLM.
+
+**Pass 2 – Scanned page rendering**: Scanned pages are rendered as JPEG (DPI 200, quality 85, max edge 2000 px) with `image_source_type=scanned_pdf`. The Go application runs OCR on these images.
+
+**Pass 3 – Embedded image extraction**: Vector figures and photos are extracted from text pages, filtered by minimum pixel size and page-area ratio, and inserted into the Markdown output.
+
+## Per-Upload Parsing Configuration
+
+The upload confirmation dialog lets you override parsing configuration for a specific batch of documents. Options include whether to generate a document summary, the parse engine, and image processing settings. The priority order is:
+
+1. **Per-upload overrides** (`KnowledgeProcessOverrides` in the request body)
+2. **KB-level configuration**
+3. **Workspace defaults**
+
+Existing documents must be re-parsed to use updated chunking parameters.
+
+## Image Processing: OCR and VLM Captioning
+
+After docreader returns images as inline bytes, the Go application runs two pipelines depending on the knowledge base's `ImageProcessingConfig`:
+
+<Tabs>
+  <Tab title="Legacy Pipeline (caption_ocr)">
+    The default when `image_attrs_enabled` is `false`. Every image receives one description request and one OCR request independently.
+  </Tab>
+  <Tab title="Observation-Driven Pipeline">
+    Enabled when `image_attrs_enabled` is `true`. A single "attribute observation + description" call first determines whether the image contains block text (`contain.text = block`) or data visualizations (`contain.data_visual = true`). A pure-function decision (`DecideOCR`) then decides whether OCR is warranted—skipping OCR for images that clearly have no text, reducing unnecessary model calls.
+  </Tab>
+</Tabs>
+
+### Image Vector Indexing
+
+When `image_vector_enabled` is `true` **and** the configured embedding model supports image input, WeKnora generates an image vector in addition to the text vector for each image. During retrieval, the candidate pool is expanded by 1.5× and image hits are filtered with a separate threshold of `min(VectorThreshold, 0.1)`.
+
+<Note>
+`image_vector_enabled` defaults to `false` and must be explicitly enabled. It does not auto-enable based on model capabilities because doing so would silently add one embedding call per image to every knowledge base using a vision-capable model.
+</Note>
+
+## Chunking Strategies
+
+After parsing, the Go application applies one of three chunking strategies before vectorization:
+
+<Accordion title="Adaptive Three-Tier Strategy (auto)">
+  WeKnora profiles the document structure (heading counts, heuristic markers, language) and builds a tier chain: **Heading → Heuristic → Legacy (recursive)**. Each tier's output is validated; if it fails (too many tiny chunks, single chunk for a large document, etc.) the next tier is tried. Legacy is the guaranteed fallback.
+</Accordion>
+
+<Accordion title="Parent-Child Chunking">
+  Enabled with `enable_parent_child = true`. Documents are split twice: large parent chunks (default 4096 chars) for context, and small child chunks (default 384 chars) for embedding. Retrieval matches child chunks, and the parent chunk content is returned to the language model—providing precise matching with rich context.
+</Accordion>
+
+<Accordion title="Fixed-Size Recursive Chunking (legacy)">
+  The original recursive splitter, ported from the Python `TextSplitter`. Splits by separator priority (`\n\n` → `\n` → `。`) with protected spans for LaTeX formulas, Markdown images, links, tables, and code blocks. Default chunk size 512, overlap 80.
+</Accordion>
+
+## Parsing Timeline
+
+Open a document's **Parsing Timeline** drawer to see per-stage timing and results. The stages are:
+
+1. **Document parsing** (docreader gRPC call)
+2. **Chunking** (Go chunker)
+3. **Vectorization** (embedding model)
+4. **Multimodal** (OCR + VLM captioning for images)
+5. **Post-processing** (summary, question generation, graph extraction, Wiki generation)
+
+If a stage fails, a top-level error card shows the stage name, error code, backend reason, and a **Retry** button. Documents stuck for more than 20 minutes are flagged as **Possibly Stuck**—you can stop parsing and retry, or inspect the timeline to see which stage stalled.
+
+## Stopping and Retrying Failed Parses
+
+From the document list or the Parsing Timeline, you can:
+
+- **Stop parsing**: Cancels in-flight tasks for the document (`parse_status = cancelled`).
+- **Re-parse**: Resets the document to `pending` and re-queues the full pipeline. Use this after changing chunking parameters or fixing a docreader configuration issue.
+- **Batch re-parse**: Select multiple documents and use the batch operations bar to re-parse all at once.
+
+## docreader Configuration Reference
+
+| Environment Variable | Default | Description |
+| --- | --- | --- |
+| `DOCREADER_GRPC_MAX_WORKERS` | `4` | gRPC thread pool size |
+| `DOCREADER_GRPC_MAX_FILE_SIZE_MB` | `50` | Max gRPC message size (MB) |
+| `DOCREADER_PDF_RENDER_DPI` | `200` | DPI for scanned page rendering |
+| `DOCREADER_PDF_SCAN_IMAGE_RATIO` | `0.5` | Image coverage ratio threshold for scanned page classification |
+| `DOCREADER_PDF_FORCE_SCANNED` | `false` | Force all pages to be treated as scanned |
+| `WEKNORA_DOCREADER_CALL_TIMEOUT` | `30m` | Max duration of a single docreader gRPC call (Go side) |
+| `WEKNORA_DOCUMENT_PROCESS_TIMEOUT` | `2h` | Max duration of a full document processing task (Go side) |
+| `GRPC_AUTH_TOKEN` | — | Enables Bearer token authentication when set |
+| `GRPC_TLS_ENABLED` | `false` | Enables TLS; service refuses to start if TLS config is incomplete |
+
+## Source Locators and Citation Highlighting
+
+Each chunk is stored with `source_locators` that record its position in the original file. When a user clicks a citation in a chat answer, WeKnora opens the original document and highlights the exact paragraph.
+
+| Source | Locator Type |
+| --- | --- |
+| PDF (text pages, builtin engine) | `pdf`: `page` + `bbox` |
+| Word (DOCX) | `docx`: `block` |
+| PowerPoint | `slide`: `slide` |
+| Excel / CSV | `sheet`: `sheet` + `row_start` / `row_end` |
+| EPUB | `section`: `section` |
+| Markdown / TXT | `text`: `start` / `end` |
+| Audio | `time`: `start_ms` / `end_ms` |

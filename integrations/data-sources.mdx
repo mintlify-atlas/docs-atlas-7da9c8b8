@@ -1,0 +1,247 @@
+---
+title: "Data Sources: Auto-Sync External Content"
+sidebarTitle: "Data Sources"
+description: "Connect Feishu, Confluence, GitLab, Notion, Yuque, DingTalk, Seafile, IMA, and RSS to a knowledge base for automatic incremental sync with scheduling and manual trigger support."
+---
+
+Data sources keep a knowledge base up to date by continuously pulling content from external platforms. Once a connection is established, WeKnora fetches new and modified documents on a schedule you define. The first sync retrieves the full selected scope; subsequent syncs use connector-specific cursors to apply only incremental changes.
+
+Data sources are configured per knowledge base. Open the target knowledge base, go to the **Data Sources** tab, create a connection, fill in credentials, choose the sync scope and schedule, and save. WeKnora will immediately start the first sync.
+
+<Note>
+  The `sync_schedule` field uses a six-segment cron expression that includes seconds — for example, `0 0 */6 * * *` triggers every six hours. An empty string means manual-only sync. Invalid expressions are rejected with HTTP 400 at save time.
+</Note>
+
+## Supported Connectors
+
+| Connector | Type ID | Syncs |
+|-----------|---------|-------|
+| Feishu Wiki | `feishu` | Wiki spaces and nodes |
+| Lark Wiki | `lark` | Wiki spaces and nodes (international Lark cloud) |
+| Feishu Drive | `feishu_drive` | Specific Drive folders |
+| Lark Drive | `lark_drive` | Specific Drive folders |
+| Notion | `notion` | Pages and databases |
+| Confluence | `confluence` | Server/Data Center or Cloud spaces |
+| Yuque | `yuque` | Knowledge base documents |
+| DingTalk Docs | `dingtalk` | Wiki spaces, folders, and online documents |
+| Tencent IMA | `ima` | Knowledge base files and notes |
+| GitLab | `gitlab` | Repository directories by branch or tag |
+| Seafile | `seafile` | Library directories and files |
+| RSS / Atom | `rss` | Feed articles |
+
+## Connector Details
+
+<Accordion title="Feishu Wiki / Lark Wiki">
+  **Authentication**: Enterprise self-built app `app_id` + `app_secret` (exchanges for tenant_access_token).
+
+  **Credential fields**: `app_id`, `app_secret`, `base_url` (optional, for private proxies or overriding the cloud endpoint)
+
+  **What is synced**: Wiki spaces and their node trees. The connector lazily loads spaces → top-level nodes → child nodes. Supported document types:
+  - `docx` / `doc` → exported as `.docx` via the async export API
+  - `sheet` / `bitable` → exported as `.xlsx`
+  - `file` → downloaded as the original file (PDF, Word, images, etc.)
+  - `mindnote` / `slides` → skipped (no content read API)
+
+  **Incremental logic**: Cursor stores `obj_edit_time` per node. A node is re-fetched only when its content edit time changes (not when metadata like title or position changes). Failed nodes are not advanced in the cursor, so they are always retried.
+
+  **Streaming checkpoints**: The Feishu connector implements streaming sync with checkpoints every 50 nodes or 30 seconds, enabling recovery from task timeouts on large wikis.
+
+  **Rate limiting**: On HTTP 429, reads the `Retry-After` header and applies exponential back-off (2s/4s/8s, up to 3 retries). 5xx errors are also retried.
+
+  **Deletion detection**: Nodes present in the cursor but absent from the current tree are marked as deleted. If enumerating a space partially fails, deletion detection is skipped for that space to avoid false deletions.
+
+  Feishu (China cloud) and Lark (international cloud at `open.larksuite.com`) share the same connector code. The `base_url` credential field can force a custom API origin.
+</Accordion>
+
+<Accordion title="Feishu Drive / Lark Drive">
+  Syncs a specific Drive folder rather than a Wiki space.
+
+  **Credential fields**: `app_id`, `app_secret`, `base_url` (optional override)
+
+  You must provide a specific `folder_token` or full `/drive/folder/<token>` URL. The Drive root cannot be used as the sync target.
+
+  Document parsing behaviour is controlled by the server-level `FEISHU_DOCX_PARSE_MODE` environment variable:
+
+  | Mode | Behaviour |
+  |------|-----------|
+  | `export` (default) | Exports `.docx` asynchronously; images are embedded in the parsed document |
+  | `blocks` | Uses the Blocks API to convert to Markdown; attachments become separate knowledge items; falls back to export on API failure |
+
+  Changing the parse mode affects only future syncs — existing indexed content is not automatically converted.
+
+  See [Feishu Drive Integration](/integrations/data-sources) for full application permission requirements.
+</Accordion>
+
+<Accordion title="Notion">
+  **Authentication**: Internal Integration Token (credential field `api_key`). API version `2026-03-11`.
+
+  **Credential fields**: `api_key`, optional `base_url` (Settings-level override)
+
+  **What is synced**: All pages and databases visible to the integration token. The connector uses the Search API to fetch the full page tree in a single call, including parent-child relationships.
+
+  **Content format**: Blocks are recursively fetched and converted to Markdown. Databases are rendered as Markdown tables. Attachments (PDFs, etc.) are downloaded as separate knowledge items. Images are inlined as `![](url)`.
+
+  **Incremental logic**: Cursor stores `last_edited_time` per page. Pages whose edit time has not changed are skipped. Database records: if any record in a database changes, the entire database table is rebuilt.
+
+  **Deletion detection**: Pages that disappear from the source are marked as deleted. Pages that become unreachable because the user unchecked a parent node are placed in an "excluded" set — they are **not** reported as deleted.
+</Accordion>
+
+<Accordion title="Confluence">
+  Supports both Confluence Server/Data Center and Confluence Cloud using HTTP Basic authentication.
+
+  | Field | Required | Description |
+  |-------|----------|-------------|
+  | `edition` | No | `server` (default, Server/Data Center) or `cloud` |
+  | `base_url` | Yes | Confluence address; Cloud: `https://<site>.atlassian.net` (auto-appends `/wiki`) |
+  | `username` | Yes | Server/DC username; Cloud: Atlassian account email |
+  | `password` | Server/DC | Account password |
+  | `api_token` | Cloud | Token from Atlassian account → API tokens page |
+
+  **What is synced**: All published pages in selected spaces. Blog posts and attachments are not imported. Each page becomes a `.md` entry with metadata including `space_key`, `space_name`, `page_id`, and `creator`.
+
+  **Incremental logic**: Compares page version numbers. Unchanged pages are skipped.
+
+  **Streaming with full-sync deletion**: The Confluence connector implements `FullStreamingConnector` — even a full resync retains the previous page baseline for deletion reconciliation.
+
+  **Deletion protection**: If a selected space becomes inaccessible, the page list is empty but was previously non-empty, or more than 20 pages disappear and represent ≥80% of the previous count, the sync aborts without performing any deletions.
+</Accordion>
+
+<Accordion title="Yuque">
+  **Authentication**: Personal or team token (credential field `api_token`, sent as `X-Auth-Token` header). Optional `base_url` for private deployments.
+
+  **What is synced**: Knowledge base documents (`type == "Doc"`, `status == "1"` published only). Formats `markdown` / `lake` use the Markdown body directly. Other formats (HTML, etc.) are skipped.
+
+  **Rate limiting**: 300ms delay between each `GetDocDetail` request to avoid hitting Yuque's personal token limits.
+
+  **Folder mode** (configurable in `settings`):
+
+  | `folder_mode` | Behaviour |
+  |--------------|-----------|
+  | `none` (default for existing sources) | All documents are flat-listed at the knowledge base root |
+  | `toc` | Documents are placed in the path hierarchy from the book's table of contents |
+
+  Set `toc_only: true` (only effective when `folder_mode: toc`) to import only documents that appear in the table of contents. Documents filtered out are not deleted from the knowledge base if already imported.
+
+  <Warning>
+    After changing `folder_mode` on an existing data source, trigger a **manual full sync** to re-file all previously imported documents into the new directory structure. Incremental sync only moves documents whose content has changed.
+  </Warning>
+</Accordion>
+
+<Accordion title="DingTalk Docs">
+  **Authentication**: Enterprise internal app with `client_id`, `client_secret`, and operator Union ID. Requires `Wiki.Workspace.Read`, `Wiki.Node.Read`, and `Storage.File.Read` permissions. Publish the app after granting permissions.
+
+  **What is synced**: Wiki spaces, folders, and online `ALIDOC`/`adoc` documents via the public Wiki / Blocks API, converted to Markdown.
+
+  **Uploaded files** (disabled by default): Set `include_uploaded_files: true` in settings to also download attached files (`docx`, `pptx`, `xlsx`, `pdf`) up to 64 MiB each. This produces additional embedding costs — keep disabled unless needed.
+
+  **Incremental logic**: Compares `modifiedTimestamp` (milliseconds), falls back to `modifiedTime` when missing.
+
+  **Failure handling**: Inaccessible resources do not block other ranges. Stale resources are kept for retry. Directory scans that are incomplete pause deletion reconciliation for that round.
+</Accordion>
+
+<Accordion title="Tencent IMA">
+  **Credential fields**: `client_id`, `api_key`, optional `base_url` (default: `https://ima.qq.com`)
+
+  **What is synced**: All files and folders within selected IMA knowledge bases. Web pages are fetched by URL; notes are read via the note OpenAPI. AI sessions and video analysis entries are skipped (no readable content API).
+
+  **Deletion detection**: Supported. Full enumeration must succeed before deletions are checked.
+
+  ```json
+  {
+    "credentials": {"client_id": "<client-id>", "api_key": "<api-key>"},
+    "resource_ids": ["<resource-id-from-tree>"]
+  }
+  ```
+</Accordion>
+
+<Accordion title="GitLab">
+  **Credential fields**: `base_url` (GitLab instance URL), `access_token` (must have read access to the target project)
+
+  **Settings structure**: `projects` is an array; each entry contains a string `project_id`, optional `ref` (branch or tag, defaults to the default branch), and optional `paths` array (subdirectory paths using forward slashes; leave empty to sync the entire repository).
+
+  ```json
+  {
+    "credentials": {
+      "base_url": "https://gitlab.example.com",
+      "access_token": "<token>"
+    },
+    "settings": {
+      "projects": [{"project_id": "123", "ref": "main", "paths": ["docs"]}]
+    }
+  }
+  ```
+
+  **Incremental logic**: Uses repository commit diffs to detect file changes. Source deletions are handled according to the `sync_deletions` setting.
+
+  **Streaming**: Implements streaming sync with checkpoints, enabling recovery from task timeouts on large repositories.
+
+  <Note>
+    Files still pass through WeKnora's file type, size, and parsing engine validation. Not all code or binary files can be indexed.
+  </Note>
+</Accordion>
+
+<Accordion title="Seafile">
+  **Credential fields**: `base_url` (Seafile address, may include a deployment path prefix like `https://example.com/seafile`), `api_token` (user API token)
+
+  **What is synced**: Selected directories and files from a single library. Encrypted libraries are not supported.
+
+  **File fingerprint**: Each file is tracked by `object_id + modified_time + size`. A file is only re-downloaded when its fingerprint changes.
+
+  **Streaming with checkpoints**: Checkpoints are saved every 50 cursor changes, before deletions, and at the end of the run.
+
+  <Note>
+    A data source can only sync files from a single Seafile library. To switch libraries, create a new data source.
+  </Note>
+
+  <Warning>
+    Both the Seafile API endpoint and the fileserver download URL must pass SSRF validation. If Seafile is on a private network, add both hostnames to `SSRF_WHITELIST`.
+  </Warning>
+
+  For the full error code reference and behaviour details, see [Seafile Integration](/integrations/data-sources).
+</Accordion>
+
+<Accordion title="RSS / Atom">
+  **Configuration**: `feed_urls` (newline or comma-separated, stored in Settings, not encrypted). Optional `auth_headers` (`Name: Value` one per line, stored encrypted in Credentials — only sent to feed requests, never to third-party article pages).
+
+  **Content extraction**: `gofeed` parses RSS/Atom/JSON feeds. For entries with links, the full article page is fetched and extracted with Readability, then converted to Markdown. If full-text extraction fails, the feed's own `content:encoded` or `description` is used as a fallback.
+
+  **Incremental logic**: Two-layer fingerprinting — first a feed signal fingerprint (skips fetching article pages if the feed hasn't changed), then a SHA-256 content fingerprint.
+
+  **Deletion**: RSS feeds naturally age out old entries — disappearing items are **not** treated as source deletions.
+
+  **Partial failure**: If one feed fails, the others continue. The sync is recorded as `partial`. Only if all feeds fail is the sync recorded as `failed`.
+</Accordion>
+
+## Sync Scheduling and Manual Trigger
+
+- **Scheduled sync**: Set `sync_schedule` to a six-segment cron expression (e.g., `0 0 */6 * * *` for every 6 hours, `0 0 2 * * *` for daily at 2 AM). Leave blank for manual-only sync.
+- **Manual trigger**: Click **Sync Now** in the data source settings, or call `POST /api/v1/datasource/:id/sync`.
+- **Pause / resume**: Pausing stops all scheduled syncs. Resuming re-registers the cron schedule. Manual sync still works while paused.
+- **Full resync**: Trigger a full sync to discard the incremental cursor and re-fetch all content.
+
+In multi-instance deployments, WeKnora uses a deterministic Asynq task ID (`dssync:<dsID>:<yyyyMMddHHmm>`) so that all instances firing simultaneously only enqueue one task.
+
+## Sync Log and Status
+
+Each sync run produces a `SyncLog` entry with:
+- Status: `running`, `success`, `partial`, `failed`, or `canceled`
+- Counts: items created, updated, deleted, skipped, and failed
+- Up to 100 per-item error samples with stable i18n error codes
+
+View sync logs in the data source settings under **Sync History**.
+
+## Data Source API Endpoints
+
+| Method | Path | Permission | Description |
+|--------|------|-----------|-------------|
+| `GET` | `/api/v1/datasource/types` | Viewer | List available connector types |
+| `POST` | `/api/v1/datasource/validate-credentials` | Admin | Test credentials without saving |
+| `POST` | `/api/v1/datasource` | Admin | Create a data source |
+| `GET` | `/api/v1/datasource?kb_id=` | Viewer | List data sources for a knowledge base |
+| `PUT` | `/api/v1/datasource/:id/credentials` | Admin | Replace credentials atomically |
+| `POST` | `/api/v1/datasource/:id/sync` | Admin | Trigger a manual sync |
+| `POST` | `/api/v1/datasource/:id/pause` | Admin | Pause scheduled sync |
+| `POST` | `/api/v1/datasource/:id/resume` | Admin | Resume scheduled sync |
+| `GET` | `/api/v1/datasource/:id/logs` | Viewer | Sync history |
+
+All credentials are stored AES-256-GCM encrypted. Credentials are never returned in API responses — only a `configured: true/false` boolean is returned.

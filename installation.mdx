@@ -1,0 +1,284 @@
+---
+title: "Install WeKnora: Docker, Kubernetes, and Lite"
+sidebarTitle: "Installation"
+description: "Deploy WeKnora with Docker Compose, Kubernetes Helm, a Lite single binary, or the Wails-based desktop app—with hardware requirements and upgrade instructions."
+---
+
+WeKnora supports four deployment topologies. Docker Compose is the recommended path for most teams—it handles all service dependencies automatically. Kubernetes Helm is for production clusters. The Lite single binary and desktop app suit personal or offline use where external service dependencies are not practical.
+
+<Warning>
+  For any network-accessible deployment, WeKnora should run inside an internal or private network, not exposed directly to the public internet. Configure firewall rules and access controls. Regularly update to the latest release for security patches.
+</Warning>
+
+## Hardware Requirements
+
+- **Docker Compose (standard):** 4 CPU cores / 8 GB RAM minimum. The `docreader` container includes LibreOffice and Playwright, which are memory-intensive. Add 2–4 GB per optional service (Milvus, OpenSearch, Langfuse). Storage: size the `postgres-data` volume and the `/data/files` bind mount to your expected knowledge base volume.
+- **CPU baseline:** The ParadeDB image (`v0.22.6-pg17` and later) requires x86-64-v2 (SSE4.2, POPCNT). AVX2 is no longer required. Verify your host CPU supports SSE4.2 before deploying.
+- **Ollama (local models):** The 8 GB minimum does not include model weights. A 7–8B parameter model typically needs 4–8 GB of additional RAM or VRAM.
+- **Kubernetes:** Requires version ≥ 1.25.0.
+
+<Tabs>
+
+  <Tab title="Docker Compose">
+    Docker Compose is the standard, recommended deployment method. All services start from a single command.
+
+    **Prerequisites:** Docker 20.10+, Docker Compose v2 (v1 `docker-compose` also works), Git.
+
+    ### 1. Clone and Configure
+
+    ```bash
+    git clone https://github.com/Tencent/WeKnora.git
+    cd WeKnora
+    cp .env.example .env
+    ```
+
+    Open `.env` and set at minimum:
+
+    ```ini
+    # Security — generate once, never change after first run
+    JWT_SECRET=<openssl rand -hex 32>
+    SYSTEM_AES_KEY=<openssl rand -hex 16>   # must be exactly 32 bytes
+
+    # Database
+    DB_USER=postgres
+    DB_PASSWORD=<strong password>
+    DB_NAME=WeKnora
+    REDIS_PASSWORD=<strong password>
+    ```
+
+    ### 2. Pull Images and Start
+
+    ```bash
+    docker compose pull        # Pull images matching WEKNORA_VERSION
+    docker compose up -d       # Start core services
+    docker compose ps          # Verify all services are healthy
+    ```
+
+    ### 3. Access the Stack
+
+    | Service | URL |
+    |---------|-----|
+    | Web UI | `http://localhost` |
+    | Backend API | `http://localhost:8080` |
+    | Health check | `http://localhost:8080/health` |
+
+    ### Core Services
+
+    | Service | Image | Host Port | Role |
+    |---------|-------|-----------|------|
+    | `frontend` | `wechatopenai/weknora-ui` | `${FRONTEND_PORT:-80}` | Nginx SPA + `/api` reverse proxy |
+    | `app` | `wechatopenai/weknora-app` | `${APP_PORT:-8080}` | Go backend, REST API, agent, async tasks |
+    | `docreader` | `wechatopenai/weknora-docreader` | internal (50051) | Python gRPC document parser |
+    | `postgres` | `paradedb/paradedb:v0.25.11-pg17` | internal (5432) | Main DB + BM25/vector retrieval |
+    | `redis` | `redis:7.0-alpine` | internal (6379) | SSE streaming + Asynq task queue |
+
+    ### Optional Profiles
+
+    | Profile | Services Added | Ports |
+    |---------|---------------|-------|
+    | `neo4j` | Neo4j 2025.x | 7474, 7687 |
+    | `minio` | MinIO | 9000, 9001 |
+    | `langfuse` | Langfuse Web + Worker + ClickHouse + MinIO | 3000, 9100, 9101 |
+    | `qdrant` | Qdrant | 6333, 6334 |
+    | `milvus` | Milvus standalone (embedded etcd) | 19530, 9091 |
+    | `weaviate` | Weaviate | 9035, 50052 |
+    | `doris` | Apache Doris FE + BE | 8030, 9030, 8040 |
+    | `searxng` | SearXNG (self-hosted web search) | 127.0.0.1:8888 |
+    | `full` | All of the above + sandbox + legacy MCP server | — |
+
+    ```bash
+    # Enable Neo4j and MinIO together
+    docker compose --profile neo4j --profile minio pull
+    docker compose --profile neo4j --profile minio up -d
+
+    # Stop all services (add -v to also delete data volumes)
+    docker compose down
+    ```
+
+    ### Upgrading
+
+    ```bash
+    # Set WEKNORA_VERSION=v0.8.2 (or keep "latest") in .env
+    docker compose pull
+    docker compose up -d
+    ```
+
+    <Warning>
+      Never change `SYSTEM_AES_KEY` on an existing deployment. All encrypted credentials (API keys, model keys, vector DB credentials) stored in the database use this key. Losing or rotating it makes encrypted data permanently unreadable.
+    </Warning>
+  </Tab>
+
+  <Tab title="Kubernetes (Helm)">
+    The `helm/` directory contains a production-ready Helm chart. It bundles `app`, `frontend`, `docreader`, PostgreSQL (ParadeDB), and Redis, with optional MinIO and Neo4j.
+
+    **Prerequisites:** Kubernetes ≥ 1.25.0, Helm 3.
+
+    ### Chart Details
+
+    `helm/Chart.yaml`: API version v2, chart name `weknora`, requires Kubernetes ≥ 1.25.0. Key `values.yaml` configuration:
+
+    ```yaml
+    app:
+      replicaCount: 1
+      env:
+        GIN_MODE: release
+        RETRIEVE_DRIVER: postgres      # or elasticsearch_v7/v8, qdrant, milvus …
+        STORAGE_TYPE: local            # or minio, cos, s3, tos, obs, oss
+        STREAM_MANAGER_TYPE: redis
+
+    postgresql:
+      enabled: true
+      persistence:
+        enabled: true
+        size: 10Gi
+
+    redis:
+      enabled: true
+      persistence:
+        enabled: true
+        size: 1Gi
+
+    dataFiles:
+      persistence:
+        enabled: true
+        size: 10Gi
+
+    global:
+      maxFileSizeMB: 50   # applied to frontend (Nginx body limit), app, and docreader
+
+    # Required secrets — or reference an existing Secret with existingSecret
+    secrets:
+      dbPassword: ""
+      redisPassword: ""
+      jwtSecret: ""
+      systemAesKey: ""    # 32-byte AES-256 master key
+    ```
+
+    ### Install
+
+    ```bash
+    helm install weknora ./helm \
+      --namespace weknora \
+      --create-namespace \
+      --set secrets.dbPassword=<strong-password> \
+      --set secrets.redisPassword=<strong-password> \
+      --set secrets.jwtSecret=$(openssl rand -hex 32) \
+      --set secrets.systemAesKey=$(openssl rand -hex 16)
+    ```
+
+    ### Upgrade
+
+    ```bash
+    helm upgrade weknora ./helm \
+      --namespace weknora \
+      --reuse-values
+    ```
+
+    <Note>
+      The Helm chart defaults to `paradedb/paradedb:v0.18.9-pg17`—a different patch version than the Docker Compose default (`v0.25.11-pg17`). Check `helm/values.yaml` and align versions before mixing environments.
+    </Note>
+  </Tab>
+
+  <Tab title="Lite Binary">
+    The Lite runtime runs the entire WeKnora stack as a **single process** with no external service dependencies. It uses SQLite (FTS5 + sqlite-vec) instead of PostgreSQL and an in-memory queue instead of Redis.
+
+    **Appropriate for:** personal use, offline environments, low-resource machines, and local development without Docker.
+
+    **Limitations vs. standard:** no distributed task queue, no multi-node deployment, no external vector database fanout. Knowledge base and Q&A capabilities are identical to the standard edition.
+
+    ### Build and Run
+
+    ```bash
+    # Copy the Lite-specific env file and fill in required secrets
+    cp .env.lite.example .env.lite
+    # Edit .env.lite: set SYSTEM_AES_KEY (openssl rand -hex 16) and JWT_SECRET
+
+    # Build and start
+    make run-lite
+
+    # Or: build a distributable tarball
+    make package-lite
+    ```
+
+    The key `.env.lite` differences from the standard `.env`:
+
+    ```ini
+    DB_DRIVER=sqlite
+    DB_PATH=./data/weknora.db
+    RETRIEVE_DRIVER=sqlite
+    STREAM_MANAGER_TYPE=memory
+    ```
+
+    The binary embeds the frontend static assets from `web/` (built by `make build-lite`), so no separate Nginx container is needed. Access the UI at `http://localhost:8080`.
+
+    <Note>
+      Even in Lite mode, you can still connect a local `docreader` for document parsing (`DOCREADER_ADDR=127.0.0.1:50051`) and configure Ollama or any remote LLM provider through the settings UI.
+    </Note>
+
+    ### Sandbox Support in Lite
+
+    Lite does not pre-configure a sandbox backend. You can configure Docker, CubeSandbox, or E2B through the workspace **Settings → Sandbox** page. The desktop app variant adds a macOS host-process sandbox.
+  </Tab>
+
+  <Tab title="Desktop App">
+    The desktop app wraps the Lite runtime in a native GUI application built with [Wails v2](https://wails.io/). It provides a double-click start experience, login-free automatic account creation, a macOS host sandbox, and local data stored in the system application data directory.
+
+    <Warning>
+      The desktop app has **no published installer**. It must be built from source. The `release-lite.yml` CI workflow includes cross-platform build targets (macOS universal/amd64/arm64, Linux amd64, Windows amd64) but is not triggered automatically on releases.
+    </Warning>
+
+    ### Build (macOS)
+
+    ```bash
+    make package-mac-app
+    ```
+
+    This script:
+    1. Builds the frontend into `web/`.
+    2. Runs `wails build -tags "sqlite_fts5"`.
+    3. Assembles a `.app` bundle with the binary, config, SQLite migrations, and embedded frontend at `Contents/MacOS/WeKnora Lite`.
+
+    Application data is stored at `~/Library/Application Support/WeKnora Lite/data/`. Logs go to `~/Library/Logs/WeKnora Lite/`.
+
+    ### Entry Point
+
+    `cmd/desktop/app.go` exposes native bridge methods to the frontend:
+
+    - `GetAPIBaseURL()` — returns `http://127.0.0.1:<PORT>/api/v1`
+    - HTTP port and "bind to LAN" toggle
+    - `CheckForUpdates()` — automatic update check
+  </Tab>
+
+</Tabs>
+
+## Development Mode
+
+If you are modifying WeKnora source code, use the development compose file to run only the infrastructure in Docker while `app` and `frontend` hot-reload on the host:
+
+```bash
+make dev-start      # Start postgres, redis, docreader in Docker (ports mapped to host)
+make dev-app        # Start Go backend on host (new terminal)
+make dev-frontend   # Start Vue dev server on host (new terminal)
+```
+
+Frontend changes auto-reload. Backend changes restart in 5–10 seconds with Air hot-reload. No Docker image rebuilds needed.
+
+## Common Deployment Topologies
+
+```
+Single machine (Docker Compose — most common)
+  User → frontend :80 → app :8080 → docreader
+                                  → postgres
+                                  → redis
+                                  → Ollama :11434 (host.docker.internal)
+
+Kubernetes (Helm)
+  Ingress → frontend Deployment → app Deployment
+                                → PVC: postgres / redis / data-files
+                                → docreader Deployment
+
+Personal (Lite / desktop)
+  User → WeKnora-lite (single process)
+       → SQLite + in-memory queue
+       → Ollama or remote API
+```

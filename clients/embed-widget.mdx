@@ -1,0 +1,248 @@
+---
+title: "Website Embed Widget: Add a Chat Bot to Any Site"
+sidebarTitle: "Embed Widget"
+description: "Embed a WeKnora agent chat widget on any website using a script tag, secure token exchange, per-channel rate limits, and configurable appearance options."
+---
+
+The embed widget lets you add a floating AI chat panel to any website without requiring visitors to create a WeKnora account. Visitors interact with the agent you select, which controls the knowledge base scope, model, and capabilities. The widget is a lightweight JavaScript loader that renders a sandboxed iframe pointing to your WeKnora instance.
+
+## How It Works
+
+A **channel** links a WeKnora agent to an embed destination. Each channel has:
+- A **publish token** (`em_` prefix) for authentication
+- A **domain allow-list** that gates which websites may embed it
+- Rate limits (per-IP per-minute and per-channel per-day)
+- Appearance settings (position, color, title, welcome message)
+
+Visitors never see your WeKnora account. All knowledge base selection, model configuration, and capability restrictions come from the agent bound to the channel — the widget ignores any KB or model overrides in the request.
+
+## Creating a Channel
+
+<Steps>
+  <Step title="Open the embed channel settings">
+    Navigate to **Settings → Integrations → Embed** (section key: `integration-embed`).
+  </Step>
+  <Step title="Create a new channel">
+    Click **New Channel** and fill in:
+    - **Name** — an internal label for this embed destination
+    - **Agent** — select the agent that will handle visitor queries (defaults to the built-in Quick Answer agent)
+    - **Allowed Origins** — add every domain where this widget will be embedded, e.g. `https://shop.example.com`. This is the *host site*, not your WeKnora address. Supports exact origins, `*.example.com` subdomain wildcards (matches subdomains only, not the apex), and `*` (development only — blocked in production).
+  </Step>
+  <Step title="Configure rate limits and appearance">
+    | Setting | Default | Description |
+    |---|---|---|
+    | `rate_limit_per_minute` | `30` | Requests per IP per minute |
+    | `rate_limit_per_day` | `10000` | Total requests per channel per day |
+    | `primary_color` | — | Widget theme color (CSS value, e.g. `#07C05F`) |
+    | `widget_position` | `bottom-right` | `bottom-right` / `bottom-left` / `top-right` / `top-left` |
+    | `welcome_message` | — | Greeting shown when the panel opens |
+    | `allow_web_search` | `false` | Let visitors toggle web search |
+    | `allow_file_upload` | `false` | Let visitors upload images |
+    | `default_locale` | browser | `zh-CN` / `en-US` / `ko-KR` / `ja-JP` / `ru-RU` |
+  </Step>
+  <Step title="Copy the embed snippet">
+    The channel settings page shows a ready-to-use `<script>` tag. Copy it and paste it before `</body>` on every page where you want the widget.
+  </Step>
+</Steps>
+
+## Embedding the Widget
+
+### Static Token Mode (Simple)
+
+The publish token is written directly into the HTML. Any visitor who inspects the page source can see it.
+
+```html
+<script
+  src="https://your-weknora.example.com/weknora-widget.js"
+  data-channel="YOUR-CHANNEL-UUID"
+  data-token="em_your-publish-token"
+  data-position="bottom-right"
+  data-primary-color="#07C05F"
+  data-title="AI Assistant"
+></script>
+```
+
+Suitable for internal tools, low-sensitivity sites, or when token rotation is acceptable.
+
+### Secure Mode (Recommended for Public Sites)
+
+The publish token never reaches the browser. Your backend fetches a short-lived session token and passes it to the widget.
+
+```html
+<script
+  src="https://your-weknora.example.com/weknora-widget.js"
+  data-channel="YOUR-CHANNEL-UUID"
+  data-token-endpoint="https://your-backend.example.com/weknora/embed-token"
+  data-position="bottom-right"
+></script>
+```
+
+Your backend implements the token exchange endpoint:
+
+1. Authenticate the visitor using your own session/JWT system.
+2. Call WeKnora's exchange endpoint — **server-side only**:
+
+```bash
+POST /api/v1/embed/YOUR-CHANNEL-UUID/exchange
+Authorization: Embed em_your-publish-token
+Origin: https://shop.example.com   # must match your allowed origins
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "session_token": "ems_...",
+    "expires_in": 1800
+  }
+}
+```
+
+3. Return `{ "token": "ems_...", "expiresIn": 1800 }` to the widget.
+
+The widget automatically refreshes the token at ~80% of TTL (no earlier than 30 seconds). The publish token never reaches the browser.
+
+<Warning>
+The exchange endpoint must verify your visitor's session or JWT first. Simply checking that a cookie exists does not constitute authentication. Never expose the publish token or the exchange endpoint to unauthenticated visitors.
+</Warning>
+
+### Programmatic API
+
+```html
+<script src="https://your-weknora.example.com/weknora-widget.js"></script>
+<script>
+  WeKnora.init({
+    channel: 'YOUR-CHANNEL-UUID',
+    tokenEndpoint: 'https://your-backend.example.com/weknora/embed-token',
+    position: 'bottom-right',
+    primaryColor: '#07C05F',
+    title: 'AI Assistant',
+    baseUrl: 'https://your-weknora.example.com',
+  });
+
+  // Inject per-user context with every query
+  WeKnora.setContext({ userId: 'u_123', page: location.pathname });
+
+  // Set the locale
+  WeKnora.setLocale('en-US');
+
+  // Open the panel and auto-submit a question
+  WeKnora.openWithQuery('How do I reset my password?');
+
+  // Lifecycle events
+  WeKnora.on('ready', () => console.log('widget ready'));
+  WeKnora.on('message_sent', (e) => console.log('visitor asked:', e));
+
+  // Control methods
+  // WeKnora.open() / WeKnora.close() / WeKnora.toggle() / WeKnora.destroy()
+</script>
+```
+
+### Direct iframe
+
+If you do not want to use the loader, embed the iframe directly:
+
+```html
+<iframe
+  src="https://your-weknora.example.com/embed/YOUR-CHANNEL-UUID"
+  width="400"
+  height="600"
+  style="border:none">
+</iframe>
+```
+
+Pass the token via `postMessage` after the iframe loads, or embed the token in the URL (static mode only).
+
+## Token Exchange Flow
+
+```
+Visitor browser          Your backend          WeKnora
+     |                        |                    |
+     | Open widget             |                    |
+     |----------------------->|                    |
+     | bootstrap_request       |                    |
+     |<- postMessage           |                    |
+     |                         |                    |
+     | GET /embed-token        |                    |
+     |----------------------->|                    |
+     |                        | POST /embed/:id/exchange
+     |                        |------------------->|
+     |                        |  {session_token, expires_in}
+     |                        |<-------------------|
+     | { token: "ems_..." }    |                    |
+     |<------------------------|                    |
+     |                         |                    |
+     | GET /embed/:id/config   |                    |
+     |------------------------------------------>  |
+     | POST /embed/:id/sessions                     |
+     |------------------------------------------>  |
+     | { id, sig }             |                    |
+     |<------------------------------------------  |
+     | POST /agent-chat/:session_id                 |
+     | (X-Embed-Session: sig)  |                    |
+     |------------------------------------------>  |
+     | SSE stream              |                    |
+     |<------------------------------------------  |
+```
+
+Each session gets an HMAC-SHA256 signature derived from the channel's publish token. The `X-Embed-Session` header is required on every chat request — this binds the session to the channel and prevents session ID guessing. Rotating the publish token immediately invalidates all outstanding session signatures.
+
+## Rate Limits
+
+Three independent rate-limit buckets enforce per-channel traffic:
+
+| Bucket | Limit | Scope |
+|---|---|---|
+| Per-IP per-minute | `rate_limit_per_minute` (default 30) | Single IP address |
+| Per-channel per-minute | `max(rate_limit_per_minute × 20, 120)` | All IPs combined |
+| Per-channel per-day | `rate_limit_per_day` (default 10,000) | All IPs combined |
+
+The per-channel per-minute limit prevents attackers from rotating IPs to bypass the per-IP limit. Rate limiting uses Redis atomic Lua scripts (sliding window); without Redis the limit is not enforced.
+
+## Webhook Callbacks
+
+Add a `webhook_url` to receive POST notifications when visitors send questions or receive replies:
+
+| Event | Trigger | Payload fields |
+|---|---|---|
+| `message_sent` | Visitor submits a question | `type`, `channel_id`, `session_id`, `timestamp`, `query` |
+| `message_received` | Assistant finishes replying | `type`, `channel_id`, `session_id`, `timestamp`, `content` |
+
+Security requirements for webhooks:
+- URL must be HTTPS
+- Internal/private IP addresses are rejected (SSRF protection)
+- Timeout: 5 seconds, no retries on failure
+- Add a `webhook_secret` to verify the `X-WeKnora-Signature: sha256=<hex>` HMAC header
+
+```bash
+# Verify the webhook signature in your handler
+EXPECTED=$(echo -n "$RAW_BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex | awk '{print $2}')
+# Compare EXPECTED to the value after "sha256=" in X-WeKnora-Signature
+```
+
+## Managing Channels via API
+
+All channel management endpoints require Admin role or a key with `manage_channels`.
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/agents/:id/embed-channels` | Create a channel for an agent |
+| `GET` | `/api/v1/embed-channels` | List all channels in the workspace |
+| `GET` | `/api/v1/embed-channels/:channel_id` | Get channel details (includes `publish_token`) |
+| `PUT` | `/api/v1/embed-channels/:channel_id` | Update channel configuration |
+| `DELETE` | `/api/v1/embed-channels/:channel_id` | Soft-delete a channel |
+| `POST` | `/api/v1/embed-channels/:channel_id/rotate-token` | Rotate the publish token (immediately invalidates all session signatures) |
+| `GET` | `/api/v1/embed-channels/:channel_id/stats` | Channel session statistics |
+
+## Implementation Reference
+
+| Component | Source path |
+|---|---|
+| Channel data model | `internal/types/embed_channel.go` |
+| HTTP handler | `internal/handler/embed_channel.go` |
+| Channel service | `internal/application/service/embed_channel.go` |
+| Session token service | `internal/application/service/embed_session.go` |
+| Webhook dispatch | `internal/application/service/embed_webhook.go` |
+| Auth middleware | `internal/middleware/embed_auth.go` |
+| Widget loader | `frontend/public/weknora-widget.js` |
+| Embed SPA entry | `frontend/src/embed-main.ts` |

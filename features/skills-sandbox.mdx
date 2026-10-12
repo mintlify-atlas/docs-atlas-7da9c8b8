@@ -1,0 +1,193 @@
+---
+title: "Skills and Sandbox: Agents That Run Code"
+sidebarTitle: "Skills & Sandbox"
+description: "Install skills from ClawHub, Git repos, or ZIP files into Docker, E2B, or Cube sandboxes, and give agents a session-persistent workspace with an interactive terminal and graphical desktop."
+---
+
+Skills extend agents with executable capabilities: a skill is a self-contained package containing a `SKILL.md` description, scripts, templates, and supporting resources. When an agent runs in Smart Reasoning mode with a sandbox configured, it can read skill descriptions, execute scripts, generate files, and deliver outputs—all within an isolated, session-persistent workspace.
+
+Sandboxes provide the execution environment. WeKnora supports Docker containers, CubeSandbox clusters, and E2B cloud sandboxes, as well as a lightweight host sandbox for macOS in the Lite desktop client. Each session gets a dedicated sandbox instance for its duration.
+
+## End-to-End: From Sandbox Config to First Skill Execution
+
+<Steps>
+  <Step title="Create a sandbox configuration">
+    A space Admin or Owner navigates to **Settings → Sandbox Configurations** and clicks **New Configuration**. Choose a backend (Docker, CubeSandbox, or E2B), fill in the connection details, and optionally run **Full Validation** to verify the complete connection chain.
+  </Step>
+  <Step title="Install a skill into the sandbox">
+    In the sidebar **Toolbox → Skill Management**, add a skill by entering an install source (see the table below). Select the target sandbox configuration and click **Install**. The built-in skill installer agent reads `SKILL.md`, installs dependencies, and validates that required tools and services are available.
+  </Step>
+  <Step title="Configure the agent">
+    Open an agent in the agent editor. Under **Skills**, select the sandbox configuration and set the skill selection mode to **All**, **Selected**, or **None**.
+  </Step>
+  <Step title="Set environment variables">
+    If the skill requires API keys or credentials, configure them in:
+    - **Space-level skill variables**: Toolbox → Skill Management → skill card (admin defaults)
+    - **Personal skill variables**: Settings → Sandbox Keys (personal overrides)
+    - **Space sandbox env vars**: Settings → Sandbox Configurations → `config.env_vars` (injected into every container created from this config)
+  </Step>
+  <Step title="Start a conversation and use the skill">
+    Open a conversation with the configured agent. Type a question or use `@SkillName` to explicitly mention the skill. The agent reads the skill description progressively (name and summary first, then the full `SKILL.md` on demand), executes commands with `shell_exec`, and writes deliverable files to `/workspace/output`.
+  </Step>
+  <Step title="Retrieve the output">
+    After the answer completes, click **Sandbox Panel → Artifacts** to preview and download generated files. The interactive **Terminal** and **Desktop** tabs are also available in the panel for direct sandbox access.
+  </Step>
+</Steps>
+
+## What Is a Skill?
+
+A skill package contains:
+
+- **`SKILL.md`** — A Markdown file with YAML frontmatter declaring the skill's `name`, `description`, dependencies, environment variable requirements, and usage instructions
+- **Scripts** — Shell scripts, Python scripts, or any executable that the agent can invoke via `shell_exec`
+- **Templates** — Reusable document or code templates the agent can fill in and deliver
+- **Supporting resources** — Data files, configuration examples, or reference material
+
+The agent accesses skills through **Progressive Disclosure**:
+1. **Level 1** — Agent sees the skill name and description (low-token preview)
+2. **Level 2** — Agent calls `read_file(path="skill://<name>/SKILL.md")` to read the full description and understand how to use the skill
+3. **Level 3** — Agent reads additional resources via `read_file` as needed for specific tasks
+
+## Supported Install Sources
+
+| Input Format | Description |
+| --- | --- |
+| ZIP file | Upload a skill directory exported as a ZIP |
+| `@owner/slug` | ClawHub skill by author and slug |
+| `@owner/slug@1.2.0` | ClawHub skill at a specific version |
+| `slug` or `slug@1.2.0` | ClawHub slug (unambiguous owner required) |
+| ClawHub / SkillHub page URL | Paste the catalog page URL |
+| GitHub / GitLab repository URL | Full repo or subdirectory URL |
+| `https://skills.sh/owner/repo/slug` | skills.sh install URL |
+| Direct ZIP or `SKILL.md` URL | Download URL for the package or entry file |
+
+<Note>
+Install sources must be publicly readable—downloads do not include user credentials for private repositories. For private skills, export a ZIP and upload it directly. The skill package size limit is controlled by `MAX_SKILL_BUNDLE_SIZE_MB` (default 256 MiB, maximum 512 MiB).
+</Note>
+
+## Sandbox Backends
+
+| Backend | Setup Required | Execution Model |
+| --- | --- | --- |
+| **Docker** | Docker socket or remote TLS daemon; enable via `WEKNORA_SANDBOX_DOCKER_ENABLED=true` or system settings | One long-running container per session |
+| **CubeSandbox** | Control plane URL, data plane proxy, sandbox domain, template, API key | Session-scoped remote sandbox cluster |
+| **E2B** | API key, template; optionally self-hosted API address and data plane proxy | E2B Cloud or compatible control plane |
+| **Lite host** (`host`) | macOS only; no configuration needed | Agent commands run in the local project directory, isolated by macOS Seatbelt |
+
+<Warning>
+The `local` bare-process backend has been removed—it ran commands directly on the host machine with no isolation. The Lite `host` sandbox is not a replacement; it uses macOS Seatbelt for filesystem and network isolation.
+</Warning>
+
+### Docker Configuration Notes
+
+Docker is disabled by default. Enable it in **System Settings → Network Security** or with `WEKNORA_SANDBOX_DOCKER_ENABLED=true`. Connecting to the local Docker socket grants the WeKnora app full control over the host machine's Docker daemon. For remote TCP daemons, provide a TLS certificate directory containing `ca.pem`, `cert.pem`, and `key.pem`.
+
+Accepted network modes: `bridge` or `none`. OCI runtimes (e.g., `runsc` for gVisor) can be specified via the `runtime` field.
+
+## The Sandbox Workspace
+
+Every session sandbox has a standard directory layout:
+
+| Path | Purpose |
+| --- | --- |
+| `/workspace/input` | Temporary staging for chat attachments |
+| `/workspace` | Working files, scripts, and intermediate outputs |
+| `/workspace/output` | **Deliverable files** — collected by WeKnora after the answer and available for preview/download |
+| `skill://<name>/...` | Read-only access to installed skill package resources |
+| `web://...` | Session-persistent web page snapshots (readable via `read_file`) |
+
+The workspace is **session-persistent**: the same sandbox instance is reused across all turns within a session. After each turn's answer completes, WeKnora records a git checkpoint of `/workspace`. Forking a conversation copies the workspace state at the fork point; rewinding a conversation restores the workspace to the last retained turn's checkpoint.
+
+<Tip>
+Files written to `/workspace` are available to subsequent turns in the same session. Write deliverable outputs to `/workspace/output` so they appear in the Artifacts panel and can be downloaded by the user.
+</Tip>
+
+## Skill Rollout Behavior
+
+When a skill is updated and a new snapshot is published, `skill_rollout` controls when existing sessions pick up the new version:
+
+| Rollout Mode | Behavior |
+| --- | --- |
+| `next_turn` (default) | On the next turn of any existing session, the sandbox is rebuilt with the new skill image |
+| `new_session` | Only sessions created after the update use the new image; existing sessions keep the old version |
+
+Sandbox rebuild discards any temporary state in the running container. Files saved to `/workspace/output` before the rebuild are already collected and are not affected.
+
+## Environment Variables and Credentials
+
+The variable resolution priority for skill execution is:
+
+```
+Personal skill variable  >  Personal sandbox variable  >  Space skill variable
+```
+
+| Layer | Scope | Configuration |
+| --- | --- | --- |
+| Space sandbox `config.env_vars` | All containers from this sandbox config | Settings → Sandbox Configurations |
+| Space skill variables | This skill, all users | Toolbox → Skill Management → skill card |
+| Personal sandbox variables | This sandbox config, current user | Settings → Sandbox Keys |
+| Personal skill variables | This skill, current user | Settings → Sandbox Keys → skill |
+
+<Note>
+Personal sandbox variables cannot use reserved names (`WEKNORA_*`, `PATH`, etc.). Personal skill variables may include `WEKNORA_*` names declared by the skill. Space sandbox env vars are part of the runtime environment—do not put secrets there that scripts should not be able to read.
+</Note>
+
+## Sandbox Visualization Panel
+
+For remote sandbox sessions (Docker, Cube, E2B), the **Sandbox Panel** on the right side of the conversation has three tabs:
+
+<CardGroup cols={3}>
+  <Card title="Artifacts" icon="box-archive">
+    Lists all output files generated in the current session. Filterable by turn (this turn vs. all turns) and searchable by file name. Supports inline preview for supported types and direct download.
+  </Card>
+  <Card title="Terminal" icon="terminal">
+    An interactive xterm shell connected to the session sandbox. Cube and E2B terminals reconnect after page refresh if the sandbox is still running. Docker terminals end when disconnected; a new shell opens on reconnect.
+  </Card>
+  <Card title="Desktop" icon="display">
+    A browser-accessible XFCE graphical desktop for sandboxes using desktop-enabled templates. Only one connection is allowed per session at a time. Requires `desktop_enabled: true` in the sandbox configuration.
+  </Card>
+</CardGroup>
+
+Opening the panel does **not** create or wake a sandbox. The terminal and desktop connect immediately if the sandbox is running; otherwise, use the **Launch Terminal**, **Connect Desktop**, or **Create and Start** button to wake or create it.
+
+Terminal and desktop connections auto-disconnect after idle time (default 900 seconds, configurable from 60 seconds to 24 hours via the sandbox configuration's "Terminal/Desktop Idle Disconnect" setting).
+
+## Lite Host Sandbox (macOS)
+
+Starting in WeKnora v0.8.2, the Lite desktop client on macOS uses macOS Seatbelt to isolate agent commands. This is activated when the agent has no sandbox configuration selected.
+
+- **Working directory**: Choose a project folder via **Select Project** on the new conversation page. Without selection, a temporary directory under `~/Documents/WeKnoraLite/<date>/session-*` is created
+- **Path conventions**: The host sandbox uses real macOS paths—there is no `/workspace`, `/workspace/input`, or `/workspace/output`. Files modified by the agent are real project files
+- **Restrictions**: Commands cannot access the network by default; write access is limited to the project directory; `.git` inside the project is read-only; credentials locations (`.ssh`, `.aws`, Keychain) are always inaccessible
+- **Rollback**: Conversation rewind does not restore local files—use Git if you need file-level undo
+
+## Network Policies
+
+For CubeSandbox and E2B, `config.network` applies to conversations, skill installation, and full validation:
+
+- Default: outbound traffic allowed
+- `deny_egress_by_default: true`: blocks all outbound; use `allow_out` rules to permit specific IPs, CIDRs, or domains
+- `deny_out`: accepts IPv4 addresses and CIDRs
+- Cube's `cube_rules` support Host/SNI-based filtering, method and path matching, audit logging, and HTTPS header injection
+- E2B's `e2b_host_rules` configure header injection for allowed domains
+
+<Warning>
+Injected credentials are encrypted at rest and stripped from responses. The legacy `allow_public_inbound` field does **not** enable anonymous inbound access.
+</Warning>
+
+Changes to network policies do not apply to running sandbox instances. Create or rebuild a sandbox after policy changes to pick them up.
+
+## Managing Skill Lifecycle
+
+| Operation | Result |
+| --- | --- |
+| Add to catalog | Saves the package, name, version, and description—does not install |
+| Install | Builds the runtime environment in the selected sandbox, installs dependencies, validates loadability |
+| Retry | Re-installs using the saved package; can include installation notes |
+| Upgrade | Marks existing installs as upgradeable; re-installs the new catalog version |
+| Stop installation | Cancels in-progress installation; status becomes `failed` |
+| Disable | Preserves the install record; agents no longer select the skill |
+| Uninstall from sandbox | Updates the sandbox's skill image; keeps the catalog entry |
+| Delete catalog entry | Requires no sandbox installs remain; does not implicitly uninstall |
+
+During installation, a progress panel shows percentage, stage, and live logs. Closing the panel does not stop the installation.

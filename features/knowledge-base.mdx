@@ -1,0 +1,199 @@
+---
+title: "Knowledge Bases: Organize and Query Documents"
+sidebarTitle: "Knowledge Bases"
+description: "Create and manage knowledge bases in WeKnora, upload documents, organize content with folder trees and tags, and fine-tune chunking and indexing settings per knowledge base."
+---
+
+A knowledge base is the primary container for organizing related material in WeKnora. Each knowledge base has its own chunking configuration, vector model, retrieval index settings, and optional Wiki and knowledge-graph pipelines. Files, web pages, hand-written Markdown, and FAQ items are managed as knowledge entries; once ingested they are parsed and indexed according to the base's configuration.
+
+Different knowledge bases can use independent processing configurations, which means you can tune embedding models and chunking strategies per domain without affecting other bases. Retrieval scope can be limited to specific bases during chat, and member access plus organization sharing are also authorized per knowledge base.
+
+## Knowledge Base Types
+
+WeKnora supports three distinct knowledge base types, each with different storage and indexing behavior:
+
+<CardGroup cols={3}>
+  <Card title="Document KB" icon="file-lines">
+    General-purpose knowledge base for files, web pages, and hand-written Markdown. Supports full vector, keyword (BM25), Wiki, and graph indexing.
+  </Card>
+  <Card title="FAQ KB" icon="circle-question">
+    Structured question-answer pairs with specialized matching. Supports `question_only` or `question_answer` index modes and negative-example filtering.
+  </Card>
+  <Card title="Wiki KB" icon="book-open">
+    A knowledge base with the Wiki index enabled. An agent extracts entities and concepts from documents and generates interlinked Markdown pages.
+  </Card>
+</CardGroup>
+
+<Note>
+The `VectorStoreID` binding is set at creation time and **cannot be changed afterwards**. Decide which vector store instance to use before creating a knowledge base.
+</Note>
+
+## Common Operations
+
+The following table covers the operations you will use most often and where to find them in the UI.
+
+| Operation | UI Entry Point |
+| --- | --- |
+| Create a KB, change chunk size, toggle index options | KB settings dialog → **Chunking** and **Indexing Strategy** tabs |
+| Upload files, import web pages, or write Markdown | Document list upload area, or the **New** dropdown; batch progress shown in the upload tasks panel (bottom-right) |
+| Sort the document list | Toolbar **Sort**: by updated time, upload/created time, or file name |
+| Check parse progress or investigate a stuck document | Status chip on each document card, or open the **Parsing Timeline** drawer |
+| Organize documents with folders | Folder tree on the left side of the document list; uploading a directory preserves its structure |
+| Tag documents (one document can have multiple tags) | Single document: detail view; multiple documents: check → batch-tag bar |
+| Review parse results and correct errors | Open a document → Chunks list → edit a chunk inline |
+| Add custom metadata fields (department, classification, etc.) | Document detail → Custom Metadata |
+| View operation history | KB settings → **Activity** |
+| Copy a KB or move documents across KBs | KB list **Copy** action, or batch **Move** in the document list |
+| Bulk-download original files | Check documents → batch bar **Bulk Download** (produces a ZIP preserving folder structure) |
+
+## Creating a Knowledge Base
+
+<Steps>
+  <Step title="Open the Knowledge Base list">
+    Navigate to the **Knowledge Bases** section in the sidebar and click **New Knowledge Base**.
+  </Step>
+  <Step title="Choose the content type">
+    Select **Document**, **FAQ**, or enable the **Wiki** index if you want auto-generated wiki pages. The type determines which indexing pipelines are available.
+  </Step>
+  <Step title="Select models and vector store">
+    Pick an embedding model, an optional summary model, and the vector store instance. The vector store binding cannot be changed after creation.
+  </Step>
+  <Step title="Configure chunking and indexing">
+    Set the chunk size, overlap, and strategy (recommended: `auto`). Toggle the **Vector**, **Keyword (BM25)**, **Wiki**, and **Graph** index switches as needed.
+  </Step>
+  <Step title="Save and upload documents">
+    Save the knowledge base, then upload files, import URLs, or write Markdown directly. Use the upload confirmation dialog to set tags and override parsing options for this batch.
+  </Step>
+</Steps>
+
+### Indexing Strategy Switches
+
+| Switch | Default | Effect |
+| --- | --- | --- |
+| `vector_enabled` | `true` | Semantic vector retrieval |
+| `keyword_enabled` | `true` | Keyword BM25 retrieval |
+| `wiki_enabled` | `false` | Wiki page generation |
+| `graph_enabled` | `false` | Knowledge graph extraction |
+
+## Uploading Documents
+
+The upload confirmation dialog lets you set tags and per-batch processing options, including whether to generate a document summary (enabled by default). Single-batch overrides take priority over KB-level configuration, which in turn takes priority over workspace defaults.
+
+During a bulk upload, the **Upload Tasks Panel** (bottom-right corner) summarizes all files: up to three are transferred simultaneously, and it shows bytes transferred, estimated time, and counts for retrievable, processing, failed, and already-existing files. Individual files can be cancelled or retried. You can leave the page once uploading is complete—parsing continues in the background.
+
+### Monitoring Parse Status
+
+Document cards show parse status at a glance. If a document shows no progress for more than 20 minutes it transitions to **Queued** (still waiting in the task queue, usually fine) or **Possibly Stuck** (no active task advancing it). Open the **Parsing Timeline** drawer to see which stage stalled, stop parsing, and retry.
+
+<Note>
+Documents stalled for an extended period are automatically marked as failed with error code `TASK_STALLED`. The Parsing Timeline shows per-stage timing and a top-level error card with the stage name, error code, and a retry button.
+</Note>
+
+The parse state machine is:
+
+```
+pending → processing → finalizing → completed
+                     → failed
+                     → cancelled
+```
+
+Enrichment sub-tasks (summary, question generation, graph, Wiki) run in parallel after the main parse. A single sub-task failure does not move the document to `failed`; the document enters `completed` once all sub-tasks finish.
+
+## Organizing with Folders and Tags
+
+### Folder Tree
+
+Folders provide hierarchical archiving—each document belongs to exactly one folder. When you upload an entire directory, the directory structure is preserved automatically. Renaming or moving a folder in the tree updates all child paths; if the target path already exists, the contents are merged.
+
+Moving a document to a different folder within the same knowledge base only changes its classification and does **not** trigger re-parsing or affect the index.
+
+<Tip>
+Folders and tags solve different problems and can be used together. Folders represent a single exclusive hierarchy (one directory per document), ideal for organizing by project or source. Tags are many-to-many and are better for cross-cutting classification by topic, security level, or status.
+</Tip>
+
+### Tags
+
+A document can be associated with multiple tags. Tags can be set at upload time in the confirmation dialog, or applied in bulk by checking documents and using the **Tag** button in the batch operations bar. The batch dialog pre-selects tags that are common to all selected documents.
+
+Filtering by multiple tags uses **OR semantics**—any document matching at least one of the selected tags is returned.
+
+### Auto-Tagging
+
+When auto-tagging is enabled, WeKnora selects matching tags from the existing candidate list after parsing completes. It does not create new tags.
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `enabled` | `false` | Enable auto-tagging |
+| `model_id` | empty | If empty, uses the KB's `summary_model_id` |
+| `max_tags` | `3` | Maximum auto-assigned tags per document (up to 10) |
+| `skip_if_tagged` | `true` | Skip documents that already have tags (from manual assignment or data sources) |
+
+Configuration only affects documents parsed after the change. It does not backfill historical documents. Model failures do not block document completion.
+
+## Editing Chunks and Metadata
+
+In a document's detail view you can edit text chunk content to fix OCR errors, table misalignment, or formula parsing mistakes. Each save or rollback creates a new revision; if another user has already updated the same chunk, you will be prompted to refresh and retry.
+
+| Field | Role |
+| --- | --- |
+| `chunks.source_content` | Immutable original parser output |
+| `chunks.content` | Current content used for retrieval and display |
+| `chunks.content_revision` | Optimistic concurrency lock, incremented on each edit or rollback |
+| `chunks.index_status` | `ready` / `processing` / `failed`—whether the current content is reflected in the search index |
+| `chunk_revisions` table | Historical snapshots for rollback |
+
+Editing supports an `expected_revision` field for optimistic concurrency—if the revision you supply does not match the current value, a `409` is returned. Index rebuild failures preserve the edited content but set `index_status = failed`; re-submitting the same content triggers a retry.
+
+<Note>
+Only `text`-type chunks can be edited. Content cannot be empty (after stripping whitespace) and has an upper limit of 200,000 bytes.
+</Note>
+
+Custom metadata (department, security classification, version number, etc.) supports up to 20 fields per document. Modifying metadata triggers a summary refresh.
+
+## Copying and Moving Content
+
+You can copy an entire knowledge base to reuse its configuration and content. When moving documents across knowledge bases, two modes are available:
+
+- **`reuse_vectors`**: Directly reuses existing vectors—requires both the source and target KB to be bound to the same vector store.
+- **`reparse`**: Re-parses in the target KB, generating new vectors. This allows cross-vector-store moves.
+
+Move operations are asynchronous; progress can be queried via `GET /knowledge/move/progress/:task_id`.
+
+### Bulk Download
+
+Checking documents and clicking **Bulk Download** packages the original files into a ZIP that preserves the knowledge base folder structure. Limits: up to 200 documents per batch, with a combined original-file size of up to 512 MiB. Web-imported entries without original files are skipped. Requires Contributor or higher role with edit access to the knowledge base.
+
+## Activity and Usage
+
+The **Activity** tab in KB settings records configuration changes, document uploads and deletions, chunk edits, sharing changes, and Wiki updates, including the actor, timestamp, and outcome. This view requires JWT authentication; API Key access is not supported.
+
+Storage quota is calculated per workspace and covers files, text, vectors, and indexes. Quota is checked before creating a knowledge base or uploading content; deleting content reclaims the corresponding usage.
+
+## Configuration Reference
+
+### KB Type Constants
+
+```go
+const (
+    KnowledgeBaseTypeDocument = "document" // General document KB
+    KnowledgeBaseTypeFAQ      = "faq"      // FAQ KB
+    KnowledgeBaseTypeWiki     = "wiki"     // Wiki KB
+)
+```
+
+### ChunkingConfig Fields
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `chunk_size` | int | required | Target chunk size in characters |
+| `chunk_overlap` | int | `80` | Overlap between adjacent chunks |
+| `strategy` | string | `""` (= `legacy`) | `auto` / `heading` / `heuristic` / `recursive` / `legacy` |
+| `enable_parent_child` | bool | `false` | Enable parent-child two-level chunking |
+| `parent_chunk_size` | int | `4096` | Parent chunk size (context retrieval) |
+| `child_chunk_size` | int | `384` | Child chunk size (embedding retrieval) |
+| `token_limit` | int | `0` | Token upper limit (0 = disabled) |
+| `languages` | []string | auto-detect | Language hints for heuristic chunking |
+
+### AI-Generated KB Description
+
+WeKnora can auto-generate a `generated_profile` for each knowledge base by aggregating document profiles (gist, topics, typical questions) without overwriting the user-supplied `description`. The generation pipeline runs in three layers: per-document profiles → aggregation statistics → LLM text generation. The profile is used by agents to decide which bound knowledge base to search for a given question.

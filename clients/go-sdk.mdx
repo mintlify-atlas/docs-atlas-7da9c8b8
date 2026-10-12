@@ -1,0 +1,433 @@
+---
+title: "Go SDK: CRUD and Streaming Q&A for WeKnora"
+sidebarTitle: "Go SDK"
+description: "Use the Go SDK to manage knowledge bases, upload documents, create sessions, and stream RAG Q&A responses with SSE callbacks and typed error handling."
+---
+
+The WeKnora Go SDK is a standalone module at `github.com/Tencent/WeKnora/client`. It wraps every WeKnora REST endpoint and provides a callback-based SSE streaming interface for real-time Q&A. The official CLI and server-side integrations use this same SDK.
+
+## Installation
+
+The module path is defined in `client/go.mod`:
+
+```
+module github.com/Tencent/WeKnora/client
+
+go 1.24.2
+```
+
+Add it to your project:
+
+```bash
+go get github.com/Tencent/WeKnora/client
+```
+
+Import in your code:
+
+```go
+import "github.com/Tencent/WeKnora/client"
+```
+
+## Client Initialization
+
+Create a `Client` with `NewClient`:
+
+```go
+apiClient := client.NewClient(
+    "https://kb.example.com",
+    client.WithAPIKey("sk-your-api-key"),
+    client.WithTimeout(30*time.Second),
+)
+```
+
+The default timeout for ordinary requests is 30 seconds. Streaming (SSE) requests have **no default timeout** — their lifecycle is controlled by the `context.Context` you pass.
+
+### ClientOption Reference
+
+| Option | Description |
+|---|---|
+| `WithAPIKey(key string)` | Long-lived API key; sent as `X-API-Key` header |
+| `WithBearerToken(token string)` | Short-lived JWT; sent as `Authorization: Bearer <token>` |
+| `WithToken(token string)` | **Deprecated** alias for `WithAPIKey` |
+| `WithTimeout(d time.Duration)` | Sets timeout for both regular and streaming requests |
+| `WithTransport(rt http.RoundTripper)` | Replace the underlying transport (for retries, tracing, signing) |
+| `WithTenantID(tenantID uint64)` | Attach `X-Tenant-ID` on every request (cross-tenant superusers only) |
+
+### JWT Login Flow
+
+If your application manages user sessions instead of API keys:
+
+```go
+// 1. Create an unauthenticated client
+c := client.NewClient("https://kb.example.com")
+
+// 2. Log in with email + password
+loginResp, err := c.Login(ctx, client.LoginRequest{
+    Email:    "user@example.com",
+    Password: "secret",
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+// 3. Build an authenticated client with the returned access token
+authed := client.NewClient("https://kb.example.com",
+    client.WithBearerToken(loginResp.AccessToken))
+```
+
+### Per-Request Tenant Override
+
+For applications with `CanAccessAllTenants` access:
+
+```go
+tenantID := uint64(10000)
+ctx := context.WithValue(context.Background(), "TenantID", &tenantID)
+kb, err := apiClient.GetKnowledgeBase(ctx, kbID)
+```
+
+## Knowledge Base Operations
+
+All knowledge base methods live in `client/knowledgebase.go`.
+
+```go
+// Create a knowledge base
+kb, err := apiClient.CreateKnowledgeBase(ctx, &client.KnowledgeBase{
+    Name:             "Engineering Docs",
+    Description:      "Internal engineering knowledge",
+    EmbeddingModelID: "text-embedding-3-small",
+    SummaryModelID:   "gpt-4o",
+    ChunkingConfig: client.ChunkingConfig{
+        ChunkSize:    500,
+        ChunkOverlap: 50,
+        Separators:   []string{"\n\n", "\n", ". "},
+    },
+})
+
+// List knowledge bases
+kbs, err := apiClient.ListKnowledgeBases(ctx)
+
+// Get one knowledge base by ID
+kb, err := apiClient.GetKnowledgeBase(ctx, "kb-abc123")
+
+// Update
+_, err = apiClient.UpdateKnowledgeBase(ctx, kb.ID, &client.KnowledgeBase{
+    Name: "Engineering Docs v2",
+})
+
+// Delete
+err = apiClient.DeleteKnowledgeBase(ctx, kb.ID)
+
+// Hybrid search (vector + keyword)
+results, err := apiClient.HybridSearch(ctx, kb.ID, &client.HybridSearchRequest{
+    Query:  "rate limiting algorithm",
+    TopK:   8,
+})
+```
+
+## Document (Knowledge) Operations
+
+Document methods live in `client/knowledge.go`.
+
+```go
+// Upload a local file
+knowledge, err := apiClient.CreateKnowledgeFromFile(
+    ctx,
+    kb.ID,
+    "path/to/design.pdf",
+    map[string]string{"source": "confluence"},  // metadata
+    nil,      // parse config override
+    "",       // custom file name (empty = use filename)
+    "",       // channel
+    nil,      // multimodal options
+)
+
+// Import from a URL
+knowledge, err := apiClient.CreateKnowledgeFromURL(ctx, kb.ID, &client.CreateKnowledgeFromURLRequest{
+    URL:  "https://example.com/docs/api.html",
+    Name: "API Documentation",
+})
+
+// List documents with filters
+knowledgeList, total, err := apiClient.ListKnowledgeWithFilter(ctx, kb.ID, &client.KnowledgeListFilter{
+    Status:   "completed",
+    Keyword:  "authentication",
+    PageSize: 20,
+    Page:     1,
+})
+
+// Get a single document
+doc, err := apiClient.GetKnowledge(ctx, knowledgeID)
+
+// Re-parse a document
+err = apiClient.ReparseKnowledge(ctx, knowledgeID)
+
+// Download the original file
+err = apiClient.DownloadKnowledgeFile(ctx, knowledgeID, "./downloads/")
+
+// Delete a document
+err = apiClient.DeleteKnowledge(ctx, knowledgeID)
+```
+
+## Session and Streaming Q&A
+
+Session methods live in `client/session.go`. Streaming uses a callback pattern — the SDK calls your function once per SSE frame.
+
+### Create a Session and Ask a Question
+
+```go
+// Create a session
+session, err := apiClient.CreateSession(ctx, &client.CreateSessionRequest{
+    Title:       "Q4 Planning Chat",
+    Description: "Discussion about Q4 goals",
+})
+
+// Knowledge-base Q&A with streaming
+var answer strings.Builder
+var references []*client.SearchResult
+
+err = apiClient.KnowledgeQAStream(
+    ctx,
+    session.ID,
+    &client.KnowledgeQARequest{
+        Query:            "What is our Q4 retention target?",
+        KnowledgeBaseIDs: []string{kb.ID},
+    },
+    func(response *client.StreamResponse) error {
+        switch response.ResponseType {
+        case client.ResponseTypeAnswer:
+            answer.WriteString(response.Content)
+            fmt.Print(response.Content) // stream to terminal
+        case client.ResponseTypeComplete:
+            if len(response.KnowledgeReferences) > 0 {
+                references = response.KnowledgeReferences
+            }
+        }
+        return nil
+    },
+)
+if err != nil {
+    if errors.Is(err, client.ErrSSEStreamTerminal) {
+        fmt.Printf("Server terminated stream: %v\n", err)
+    } else {
+        fmt.Printf("Stream error: %v\n", err)
+    }
+}
+fmt.Printf("\nAnswer: %s\n", answer.String())
+```
+
+### StreamResponse Types
+
+| `ResponseType` | Content |
+|---|---|
+| `answer` | Incremental answer text (delta) |
+| `references` | Retrieved source chunks |
+| `thinking` | Reasoning trace (if enabled) |
+| `tool_call` | Tool invocation by the agent |
+| `tool_result` | Tool execution result |
+| `error` | Error frame (also triggers `ErrSSEStreamTerminal` return) |
+| `session_title` | Auto-generated session title |
+| `complete` | Final frame; includes `KnowledgeReferences` |
+
+### Agent Q&A
+
+```go
+// Using the AgentSession wrapper
+agentSession := apiClient.NewAgentSession(session.ID)
+err := agentSession.Ask(ctx, "Summarize the design doc", func(ev *client.AgentStreamResponse) error {
+    if ev.ResponseType == client.AgentResponseTypeAnswer {
+        fmt.Print(ev.Content)
+    }
+    return nil
+})
+
+// Or with a full request object
+err = apiClient.AgentQAStreamWithRequest(ctx, session.ID, &client.AgentQARequest{
+    Query:             "Summarize the design doc",
+    AgentID:           "agt-abc123",
+    KnowledgeBaseIDs:  []string{kb.ID},
+    WebSearchEnabled:  false,
+}, func(ev *client.AgentStreamResponse) error {
+    fmt.Print(ev.Content)
+    return nil
+})
+```
+
+### Resume a Disconnected Stream
+
+```go
+// If a stream is interrupted, resume it with the session and message IDs
+err = apiClient.ContinueStream(ctx, sessionID, messageID, func(response *client.StreamResponse) error {
+    fmt.Print(response.Content)
+    return nil
+})
+
+// Stop an in-progress generation
+err = apiClient.StopSession(ctx, sessionID, messageID)
+```
+
+## Chunk Management
+
+```go
+// List chunks for a document (useful for RAG debugging)
+chunks, total, err := apiClient.ListKnowledgeChunks(ctx, knowledgeID, 1, 20)
+fmt.Printf("Total chunks: %d\n", total)
+
+// Update a chunk
+updated, err := apiClient.UpdateChunk(ctx, knowledgeID, chunks[0].ID,
+    &client.UpdateChunkRequest{
+        Content:   "Updated content",
+        IsEnabled: true,
+    })
+
+// Delete a chunk
+err = apiClient.DeleteChunk(ctx, knowledgeID, chunkID)
+```
+
+## Error Handling
+
+### HTTP Errors
+
+Non-2xx responses are wrapped in `*client.APIError`:
+
+```go
+var apiErr *client.APIError
+if errors.As(err, &apiErr) {
+    switch {
+    case apiErr.StatusCode == 404:
+        fmt.Println("resource not found")
+    case apiErr.Code == client.ServerErrUnauthorized: // 1001
+        fmt.Println("re-authentication required")
+    default:
+        fmt.Printf("API error %d: %s\n", apiErr.StatusCode, apiErr.Message)
+    }
+}
+```
+
+Built-in error code constants: `ServerErrBadRequest` (1000) through `ServerErrValidation` (1010).
+
+### SSE Stream Errors
+
+When the server sends a terminal error frame (`response_type=error, done=true`), the SDK first delivers the frame to your callback, then returns `*SSEStreamError`:
+
+```go
+if errors.Is(err, client.ErrSSEStreamTerminal) {
+    // Server sent an error frame and closed the stream
+}
+// Or
+if client.IsSSEStreamError(err) {
+    // Compatible with older fmt.Errorf-wrapped errors
+}
+```
+
+## Debug Logging
+
+```go
+// Enable debug logging to stderr (call before any SDK method)
+client.SetDebugLevel("debug") // "debug" / "info" / "warn" / ""=silent
+```
+
+Use `context.WithValue` to attach a request ID for distributed tracing:
+
+```go
+ctx := context.WithValue(context.Background(), "RequestID", "req-20260727-0001")
+// The SDK sends this as X-Request-ID — correlate with server logs
+```
+
+## Complete Example: KB Setup, Upload, and Streaming Q&A
+
+```go
+package main
+
+import (
+    "context"
+    "errors"
+    "fmt"
+    "strings"
+    "time"
+
+    "github.com/Tencent/WeKnora/client"
+)
+
+func main() {
+    ctx := context.Background()
+
+    apiClient := client.NewClient(
+        "https://kb.example.com",
+        client.WithAPIKey("sk-your-api-key"),
+        client.WithTimeout(30*time.Second),
+    )
+
+    // 1. Create a knowledge base
+    kb, err := apiClient.CreateKnowledgeBase(ctx, &client.KnowledgeBase{
+        Name:             "Product Docs",
+        EmbeddingModelID: "text-embedding-3-small",
+        SummaryModelID:   "gpt-4o",
+        ChunkingConfig: client.ChunkingConfig{
+            ChunkSize:    500,
+            ChunkOverlap: 50,
+        },
+    })
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("Created KB: %s (%s)\n", kb.Name, kb.ID)
+
+    // 2. Upload a document
+    doc, err := apiClient.CreateKnowledgeFromFile(
+        ctx, kb.ID, "./product-spec.pdf",
+        map[string]string{"version": "v2"},
+        nil, "", "", nil,
+    )
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("Uploaded: %s (%s)\n", doc.Title, doc.ID)
+
+    // 3. Create a session
+    session, err := apiClient.CreateSession(ctx, &client.CreateSessionRequest{
+        Title: "Product Q&A",
+    })
+    if err != nil {
+        panic(err)
+    }
+
+    // 4. Streaming Q&A
+    var answer strings.Builder
+    err = apiClient.KnowledgeQAStream(
+        ctx,
+        session.ID,
+        &client.KnowledgeQARequest{
+            Query:            "What are the main features?",
+            KnowledgeBaseIDs: []string{kb.ID},
+        },
+        func(r *client.StreamResponse) error {
+            if r.ResponseType == client.ResponseTypeAnswer {
+                answer.WriteString(r.Content)
+            }
+            return nil
+        },
+    )
+    if err != nil && !errors.Is(err, client.ErrSSEStreamTerminal) {
+        panic(err)
+    }
+    fmt.Printf("Answer: %s\n", answer.String())
+}
+```
+
+## Resource Summary
+
+| Resource | Source file | Key methods |
+|---|---|---|
+| Auth | `client/auth.go` | `Login`, `RefreshToken`, `SwitchTenant`, `GetCurrentUser` |
+| Knowledge Base | `client/knowledgebase.go` | `CreateKnowledgeBase`, `ListKnowledgeBases`, `HybridSearch` |
+| Knowledge / Documents | `client/knowledge.go` | `CreateKnowledgeFromFile`, `CreateKnowledgeFromURL`, `ListKnowledgeWithFilter`, `ReparseKnowledge` |
+| Chunks | `client/chunk.go` | `ListKnowledgeChunks`, `UpdateChunk`, `DeleteChunk` |
+| Sessions | `client/session.go` | `CreateSession`, `KnowledgeQAStream`, `ContinueStream`, `StopSession` |
+| Agent Q&A | `client/agent.go` | `AgentQAStreamWithRequest`, `NewAgentSession` |
+| Messages | `client/message.go` | `LoadMessages`, `SearchMessages`, `DeleteMessage` |
+| Models | `client/model.go` | `ListModels`, `CreateModel`, `UpdateModel` |
+| FAQ | `client/faq.go` | `UpsertFAQEntries`, `SearchFAQEntries`, `ExportFAQEntries` |
+| Organizations | `client/organization.go` | `CreateOrganization`, `ShareKnowledgeBase`, `InviteMember` |
+| MCP Services | `client/mcp_service.go` | `CreateMCPService`, `RefreshMCPMetadata`, `ResolveToolApproval` |
+| Memory | `client/memory.go` | `ListMemoryItems`, `ConfirmMemoryItem`, `ExportMemory` |
+| System | `client/system.go` | `GetDeploymentCapabilities`, `GetSystemInfo` |

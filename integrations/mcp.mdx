@@ -1,0 +1,204 @@
+---
+title: "Built-in MCP Server: Publish Knowledge to AI Tools"
+sidebarTitle: "MCP Server"
+description: "Publish WeKnora knowledge bases to Cursor, Claude, VS Code Copilot, and any MCP client via the built-in Streamable HTTP MCP Server with per-endpoint tokens and tool scopes."
+---
+
+WeKnora supports the Model Context Protocol (MCP) in two directions:
+
+1. **WeKnora as an MCP client** — connect external MCP services (Streamable HTTP or SSE) to give agents access to additional tools from your own infrastructure or third-party providers.
+2. **WeKnora as an MCP Server** — publish your knowledge bases to Cursor, Claude Desktop, Claude Code, VS Code Copilot, and any other MCP client without running a separate process.
+
+This page focuses on the **built-in MCP Server**. For information on connecting external MCP services to agents, see [Agent Engine](/features/agent).
+
+## What the Built-in MCP Server Does
+
+The built-in MCP Server exposes one Streamable HTTP endpoint per workspace endpoint configuration at:
+
+```
+/mcp/<endpoint_id>
+```
+
+<Note>
+  The MCP endpoint URL uses the `/mcp/` prefix, **not** `/api/v1/`. Your reverse proxy must forward `/mcp/` requests to the WeKnora backend in addition to `/api/`.
+</Note>
+
+Each endpoint has its own:
+- Independent bearer token (one-time display, rotatable)
+- Knowledge base scope (specific KBs or the entire workspace)
+- Tool group selection (read, Q&A, Wiki, write)
+- Rate limit (requests per minute)
+- Optional default agent for the `ask` tool
+
+One workspace can have multiple endpoints. For example, give a customer support team an endpoint that only exposes search and Q&A tools over two specific knowledge bases, while giving the content team a separate endpoint with write tools enabled.
+
+## Creating an Endpoint
+
+<Steps>
+  <Step title="Open MCP Server settings">
+    Navigate to **Settings → Publish Integrations → MCP Server** and click **New Endpoint**.
+  </Step>
+  <Step title="Configure the endpoint">
+    Fill in:
+    - **Name** — a label for this endpoint
+    - **Knowledge bases** — select specific KBs, or leave empty for all KBs in the workspace
+    - **Tools** — choose which tool groups to expose (see Tool Groups below)
+    - **Default agent** — the agent used by the `ask` tool (leave blank for the built-in quick-answer pipeline)
+    - **Rate limit** — requests per minute (default 60, max 6000)
+  </Step>
+  <Step title="Save and copy the token">
+    After saving, the endpoint token is displayed **once**. Copy it now — it will not be shown again. You can rotate the token later if needed.
+  </Step>
+  <Step title="Connect your MCP client">
+    Use the displayed endpoint URL and token to configure your MCP client (see client examples below).
+  </Step>
+</Steps>
+
+<Warning>
+  The endpoint token is shown only once at creation time. If you lose it, use **Rotate Token** to generate a new one — this immediately invalidates the old token and disconnects all clients using it.
+</Warning>
+
+## Tool Groups
+
+By default, only the read-only tools are enabled. Write tools are off by default.
+
+| Group | Tools | Default |
+|-------|-------|---------|
+| **Search & Read** | `list_knowledge_bases`, `search_knowledge`, `grep_chunks`, `list_documents`, `read_document` | ✓ Enabled |
+| **Q&A** | `ask` | ✓ Enabled |
+| **Wiki** | `wiki_search`, `wiki_read_page`, `wiki_index` | ✓ Enabled |
+| **Write** | `add_document`, `update_document`, `delete_document` | ✗ Disabled |
+
+<Accordion title="Tool details">
+  - **`search_knowledge`**: Supports `mode` (`hybrid`, `semantic`, `keyword`), `limit` (default 10, max 30), and accepts both KB ID and KB name.
+  - **`grep_chunks`**: Case-insensitive regex search. Extracts literal keywords for index retrieval (up to 30 candidates), then filters with the regex. Patterns with no literal words (e.g., `^\d+$`) are rejected. For exhaustive search within a single document, use `read_document` with a `query`.
+  - **`ask`**: Runs the endpoint's configured default agent. The client cannot choose a different agent. Creates a session automatically; pass `session_id` back for follow-up questions. Web search is not enabled.
+  - **`read_document`**: Supports pagination with `offset`/`limit`, or phrase search within a document using `query`.
+  - **Write tools**: Support Markdown text or URL import.
+</Accordion>
+
+## Connecting MCP Clients
+
+<CodeGroup>
+
+```json Cursor / VS Code Copilot
+{
+  "mcpServers": {
+    "weknora-docs": {
+      "url": "https://your-weknora.example.com/mcp/<endpoint_id>",
+      "headers": {
+        "Authorization": "Bearer mcp_xxxxxxxx"
+      }
+    }
+  }
+}
+```
+
+```bash Claude Code
+claude mcp add --transport http weknora-docs \
+  https://your-weknora.example.com/mcp/<endpoint_id> \
+  --header "Authorization: Bearer mcp_xxxxxxxx"
+```
+
+```json Claude Desktop (stdio-only clients via mcp-remote)
+{
+  "mcpServers": {
+    "weknora-docs": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://your-weknora.example.com/mcp/<endpoint_id>",
+        "--header",
+        "Authorization: Bearer mcp_xxxxxxxx"
+      ]
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+<Tip>
+  The built-in MCP Server simultaneously supports both `2026-07-28` and `2025-11-25` protocol clients on the same URL. New clients use `server/discover`; old clients continue to use `initialize`.
+</Tip>
+
+## Reverse Proxy Requirements
+
+If you use a custom reverse proxy, ensure it forwards **both** `/api/` and `/mcp/` paths to the WeKnora backend. The proxy must:
+- Preserve the `Authorization` header
+- Preserve MCP protocol headers (`Mcp-Method`, `Mcp-Name`, `Mcp-Session-Id`)
+- Disable response buffering
+- Set sufficient read/write timeouts for long-lived connections
+
+The official Nginx, Vite dev, and preview configurations in the repository already include the `/mcp/` proxy rules.
+
+## Token Rotation
+
+To rotate an endpoint token:
+1. Go to **Settings → Publish Integrations → MCP Server**
+2. Click the endpoint and select **Rotate Token**
+3. Copy the new token immediately — it is shown only once
+4. Update all MCP client configurations with the new token
+
+The old token is invalidated immediately upon rotation.
+
+## Rate Limiting
+
+Each endpoint enforces a sliding-window rate limit (default: 60 requests per minute, configurable up to 6000). Rate limiting uses Redis when available, with a local fallback for single-instance deployments.
+
+Rate limits apply to the endpoint as a whole — not per-client. If multiple team members share one endpoint, consider creating separate endpoints or raising the limit.
+
+## Image Links in Tool Results
+
+MCP tool results that reference knowledge base images automatically rewrite `resource://` internal URLs to publicly accessible HTTP(S) links. To ensure these links work from external MCP clients:
+
+1. Set `APP_EXTERNAL_URL` to your deployment's public URL
+2. Ensure your reverse proxy forwards `/r/` requests to the WeKnora backend
+
+## MCP Tool Human Approval
+
+When agents use external MCP services (not the built-in MCP Server), individual tools can be configured to require human approval before execution. This applies to the WeKnora-as-MCP-client direction.
+
+To enable approval for a tool:
+1. Go to **Toolbox → MCP Services**
+2. Open a service and find the tool in the tool list
+3. Toggle **Require Approval**
+
+When the agent calls that tool, a confirmation card appears in the conversation. The user can approve (optionally modifying the arguments), reject, or let it time out (default 10 minutes). Approval decisions are coordinated cross-instance via Redis Pub/Sub.
+
+## MCP OAuth for External Services
+
+For external MCP services that require OAuth 2.0 authentication:
+
+- WeKnora implements the full authorization code flow with RFC 9728 discovery, RFC 7591 dynamic client registration, and PKCE
+- Each user gets their own OAuth token, stored AES-256-GCM encrypted
+- Token refresh uses a distributed lease (database-level) to ensure the refresh token is consumed only once in multi-instance deployments
+- In IM channels (non-interactive), WeKnora appends an authorization link to the reply instead of blocking the conversation
+
+## Built-in MCP Server vs. Deprecated Python mcp-server
+
+The built-in MCP Server (`/mcp/:endpoint_id`) is the current production solution. It:
+- Runs in-process as part of the main Go application
+- Supports multiple endpoints per workspace
+- Requires no separate process or deployment
+
+The `mcp-server/` directory in the repository contains an older Python service (`tencent-weknora-mcp` on PyPI). It is **deprecated** and will be removed in a future version. It binds a single API key to a single workspace per process and requires separate deployment.
+
+<Warning>
+  For new deployments, use the built-in MCP Server. The Python `mcp-server/` is maintained only for users who cannot yet migrate.
+</Warning>
+
+## Endpoint Management API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/mcp-endpoints` | List all endpoints |
+| `GET` | `/api/v1/mcp-endpoints/tools` | Tool catalog (groups and defaults) |
+| `POST` | `/api/v1/mcp-endpoints` | Create endpoint (response includes one-time token) |
+| `GET` | `/api/v1/mcp-endpoints/:endpoint_id` | Endpoint details |
+| `PUT` | `/api/v1/mcp-endpoints/:endpoint_id` | Update endpoint |
+| `DELETE` | `/api/v1/mcp-endpoints/:endpoint_id` | Delete endpoint |
+| `POST` | `/api/v1/mcp-endpoints/:endpoint_id/rotate-token` | Rotate token (response includes new token) |
+
+Read operations require Viewer permission; write operations require Admin. API Keys need the `manage_channels` capability.

@@ -1,0 +1,364 @@
+---
+title: "Tenants, Members, and API Keys Reference"
+sidebarTitle: "Tenants"
+description: "Manage workspaces (tenants), invite and administer members, create scoped API keys, and control workspace-level KV configuration and audit logs."
+---
+
+In WeKnora, a **tenant** is a workspace — an isolated container for knowledge bases, agents, models, and members. Every user belongs to at least one tenant. Workspace owners control membership, API keys, and workspace lifecycle. This page covers the full workspace management API including member invitations, role changes, scoped API key creation, and audit logging.
+
+<Note>
+  All `/api/v1/tenants/:id/*` routes enforce that the `:id` in the URL matches the caller's active workspace (cross-tenant super-admins are exempt). This prevents workspace ID enumeration and cross-workspace privilege escalation.
+</Note>
+
+---
+
+## Workspaces
+
+### Create a Workspace
+
+`POST /api/v1/tenants`
+
+Any authenticated user may create a workspace and automatically becomes its Owner. Platform API Keys with `system_tenants_manage` capability may also create workspaces.
+
+<ParamField body="name" type="string" required>
+  Workspace name (1–128 characters).
+</ParamField>
+
+<ParamField body="description" type="string">
+  Optional description (max 512 characters).
+</ParamField>
+
+```bash
+curl -X POST $BASE/api/v1/tenants \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Engineering Team"}'
+```
+
+**Response:** `201 {"success":true,"data":{Tenant}}`
+
+<ResponseField name="id" type="string">Workspace ID.</ResponseField>
+<ResponseField name="name" type="string">Workspace name.</ResponseField>
+<ResponseField name="status" type="string">Workspace status.</ResponseField>
+<ResponseField name="storage_quota" type="integer">Allocated storage in bytes.</ResponseField>
+
+### List / Get / Update / Delete a Workspace
+
+```bash
+# List accessible workspaces
+curl $BASE/api/v1/tenants -H "Authorization: Bearer $TOKEN"
+
+# Get workspace details (Viewer+)
+curl $BASE/api/v1/tenants/1 -H "Authorization: Bearer $TOKEN"
+
+# Update (Owner only)
+curl -X PUT $BASE/api/v1/tenants/1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Platform Engineering"}'
+
+# Delete (Owner only — soft-deletes workspace and all memberships)
+curl -X DELETE $BASE/api/v1/tenants/1 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+## Members
+
+### List Members
+
+`GET /api/v1/tenants/:id/members`  
+Requires Viewer+. API Key needs `manage_members` or full-access.
+
+<ParamField query="q" type="string">Filter by email or username.</ParamField>
+<ParamField query="page" type="integer" default="1">Page number.</ParamField>
+<ParamField query="page_size" type="integer" default="20">Items per page.</ParamField>
+
+```bash
+curl "$BASE/api/v1/tenants/1/members?q=alice" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Response fields per member:**
+<ResponseField name="user_id" type="string">User ID.</ResponseField>
+<ResponseField name="email" type="string">User email.</ResponseField>
+<ResponseField name="username" type="string">Username.</ResponseField>
+<ResponseField name="role" type="string">`owner`, `admin`, `contributor`, or `viewer`.</ResponseField>
+<ResponseField name="status" type="string">Membership status.</ResponseField>
+<ResponseField name="joined_at" type="string">ISO 8601 join timestamp.</ResponseField>
+
+### Add a Member Directly
+
+`POST /api/v1/tenants/:id/members`  
+Requires Owner role.
+
+<ParamField body="email" type="string" required>
+  Email address of an existing registered user.
+</ParamField>
+
+<ParamField body="role" type="string" required>
+  Role to assign: `owner`, `admin`, `contributor`, or `viewer`.
+</ParamField>
+
+```bash
+curl -X POST $BASE/api/v1/tenants/1/members \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"bob@example.com","role":"contributor"}'
+```
+
+### Change a Member's Role
+
+```bash
+curl -X PUT $BASE/api/v1/tenants/1/members/u-123 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"role":"admin"}'
+```
+
+### Remove a Member
+
+```bash
+curl -X DELETE $BASE/api/v1/tenants/1/members/u-123 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+## Invitations
+
+### Send an Invitation
+
+`POST /api/v1/tenants/:id/invitations`  
+Requires Owner. The invitee receives an invitation they must accept via `POST /api/v1/me/invitations/:inv_id/accept`.
+
+<ParamField body="email" type="string" required>Email of the person to invite.</ParamField>
+<ParamField body="role" type="string" required>Role to grant upon acceptance.</ParamField>
+<ParamField body="message" type="string">Optional personal note.</ParamField>
+
+```bash
+curl -X POST $BASE/api/v1/tenants/1/invitations \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"carol@example.com","role":"viewer","message":"Join our team KB"}'
+```
+
+### Create a Shareable Invite Link
+
+`POST /api/v1/tenants/:id/invite-links`  
+Generates a reusable link that anyone can use to join the workspace.
+
+```bash
+curl -X POST $BASE/api/v1/tenants/1/invite-links \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"role":"viewer"}'
+```
+
+**Response includes:** `token`, `invite_url`, `accepted_count`
+
+### List and Revoke Invitations
+
+```bash
+# List pending (and optionally completed) invitations
+curl "$BASE/api/v1/tenants/1/invitations?include_terminal=false" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Revoke an invitation
+curl -X DELETE $BASE/api/v1/tenants/1/invitations/12 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+## API Keys
+
+### Create a Workspace API Key
+
+`POST /api/v1/tenants/:id/api-keys`  
+Requires Owner role, **JWT only** (API Keys cannot create other API Keys).
+
+<Note>
+  The plaintext key is returned **once** in the creation response under both `api_key` and `token`. Store it immediately; it cannot be retrieved again.
+</Note>
+
+<ParamField body="name" type="string" required>
+  Descriptive name for this key (e.g., `"ingest-pipeline"`, `"search-integration"`).
+</ParamField>
+
+<ParamField body="full_access" type="boolean" default="false">
+  Grant full workspace access equivalent to an Owner machine principal. When `true`, the `capabilities` and `knowledge_base_ids` fields are ignored.
+</ParamField>
+
+<ParamField body="capabilities" type="array">
+  List of specific capabilities to grant. See the [Authentication](/api/authentication) page for the full list. Example: `["ingest","retrieve","chat"]`.
+</ParamField>
+
+<ParamField body="knowledge_base_ids" type="array">
+  Restrict this key to specific knowledge bases. Any request touching a KB not in this list will be rejected with 403.
+</ParamField>
+
+<ParamField body="expires_at_unix" type="integer">
+  Optional expiry as a Unix timestamp. Omit for a non-expiring key.
+</ParamField>
+
+```bash
+curl -X POST $BASE/api/v1/tenants/1/api-keys \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "ingest-bot",
+    "capabilities": ["ingest", "retrieve"],
+    "knowledge_base_ids": ["kb-1", "kb-2"]
+  }'
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": 5,
+    "name": "ingest-bot",
+    "api_key": "wk_live_...",
+    "token": "wk_live_...",
+    "full_access": false,
+    "capabilities": ["ingest", "retrieve"],
+    "knowledge_base_ids": ["kb-1", "kb-2"],
+    "created_at": "2025-01-15T10:00:00Z"
+  }
+}
+```
+
+### Update an API Key
+
+All fields must be submitted together (not PATCH semantics). The plaintext key is not re-issued.
+
+```bash
+curl -X PUT $BASE/api/v1/tenants/1/api-keys/5 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "search-bot",
+    "full_access": false,
+    "capabilities": ["retrieve"],
+    "knowledge_base_ids": ["kb-1"]
+  }'
+```
+
+### List and Delete API Keys
+
+```bash
+# List (keys are masked)
+curl $BASE/api/v1/tenants/1/api-keys -H "Authorization: Bearer $TOKEN"
+
+# Delete
+curl -X DELETE $BASE/api/v1/tenants/1/api-keys/5 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+## Platform API Keys (SystemAdmin Only)
+
+Platform keys can access cross-workspace administrative endpoints.
+
+```bash
+curl -X POST $BASE/api/v1/system/admin/api-keys \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "ops-automation",
+    "capabilities": ["system_tenants_read", "system_runtime_read"]
+  }'
+```
+
+**Platform capabilities:** `system_tenants_read`, `system_tenants_manage`, `system_settings_read`, `system_settings_manage`, `system_runtime_read`, `system_runtime_manage`, `system_audit_read`.
+
+---
+
+## Current Caller Identity
+
+Works with any valid authentication method (JWT, API Key):
+
+```bash
+curl $BASE/api/v1/auth/me -H "X-API-Key: $API_KEY"
+```
+
+---
+
+## Workspace KV Configuration
+
+Workspace-scoped settings stored as key-value pairs.
+
+<ParamField path="key" type="string">
+  One of: `web-search-config`, `prompt-templates`, `parser-engine-config`, `storage-engine-config`, `chat-history-config`, `retrieval-config`, `memory-config`.
+</ParamField>
+
+```bash
+# Read retrieval config
+curl $BASE/api/v1/tenants/kv/retrieval-config -H "Authorization: Bearer $TOKEN"
+
+# Update web search settings (Admin+)
+curl -X PUT $BASE/api/v1/tenants/kv/web-search-config \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"enabled":true,"provider":"bing","api_key":"..."}'
+```
+
+---
+
+## Audit Log
+
+All access control decisions are recorded. Denied operations are included.
+
+`GET /api/v1/tenants/:id/audit-log`  
+Requires Admin+, JWT only.
+
+<ParamField query="after_id" type="integer">
+  Cursor from the previous response's `next_cursor` field.
+</ParamField>
+
+<ParamField query="limit" type="integer" default="50">
+  Records per page (max 100).
+</ParamField>
+
+<ParamField query="action" type="string">
+  Filter by action code, e.g., `rbac.member_added`.
+</ParamField>
+
+<ParamField query="outcome" type="string">
+  `success` or `denied`.
+</ParamField>
+
+<ParamField query="actor" type="string">
+  Filter by actor `user_id`.
+</ParamField>
+
+```bash
+curl "$BASE/api/v1/tenants/1/audit-log?limit=50&outcome=denied" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 1001,
+      "action": "rbac.knowledge_base.delete",
+      "outcome": "denied",
+      "actor_id": "u-5",
+      "resource_type": "knowledge_base",
+      "resource_id": "kb-3",
+      "tenant_id": 1,
+      "created_at": "2025-01-15T09:30:00Z"
+    }
+  ],
+  "next_cursor": 1001
+}
+```
+
+Pass `next_cursor` as `after_id` in the next request to page forward.

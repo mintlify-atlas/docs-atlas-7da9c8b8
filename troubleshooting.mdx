@@ -1,0 +1,358 @@
+---
+title: "Troubleshooting WeKnora: Common Issues and Fixes"
+sidebarTitle: "Troubleshooting"
+description: "Diagnose and fix common WeKnora startup failures, model connection errors, document parsing stalls, vector DB issues, and upgrade problems."
+---
+
+Before digging into specific symptoms, run these commands from the repository root to get an overview of the current state. Most problems leave clear traces in the `app` or `docreader` logs.
+
+```bash
+# Check container status and health
+docker compose ps
+
+# Tail logs for the main services
+docker compose logs --tail=200 app
+docker compose logs --tail=200 docreader
+docker compose logs --tail=200 postgres
+docker compose logs --tail=200 redis
+
+# Verify the backend is reachable
+curl http://localhost:8080/health
+# Expected: {"status":"ok"}
+```
+
+After editing `.env`, recreate the affected container with:
+
+```bash
+docker compose up -d app
+# or
+docker compose up -d frontend
+```
+
+`docker compose restart` does **not** reload environment variables—always use `up -d`.
+
+<Note>
+  Also check **Settings → System Info** in the UI. It shows the application version, database migration version, dirty-state flag, and dependency connection status, which is the fastest way to confirm whether your changes took effect.
+</Note>
+
+---
+
+## Startup Issues
+
+<Accordion title="Containers fail to start or restart in a loop">
+  **Symptom:** `docker compose ps` shows one or more containers in `Restarting` state or `Exit 1`.
+
+  **Steps:**
+
+  1. Read the full startup log:
+     ```bash
+     docker compose logs --tail=500 app
+     ```
+
+  2. **Missing `.env` file:** The `app` service uses `env_file: [.env]`. If `.env` does not exist, Docker Compose fails to parse the compose file entirely:
+     ```bash
+     cp .env.example .env
+     # Then edit required variables
+     docker compose up -d
+     ```
+
+  3. **Database connection refused:** The `app` container waits for `postgres` to be healthy. If PostgreSQL fails to start, check its logs:
+     ```bash
+     docker compose logs postgres
+     ```
+     Common causes: wrong `DB_USER`/`DB_PASSWORD`/`DB_NAME` values, or an existing data volume from a different PostgreSQL version. If it is safe to wipe data:
+     ```bash
+     docker compose down -v   # WARNING: deletes all data volumes
+     docker compose up -d
+     ```
+
+  4. **`SYSTEM_AES_KEY` length mismatch:** The key must be exactly 32 bytes (use `openssl rand -hex 16` which produces 32 hex characters). Any other length causes a startup validation failure visible in the `app` log.
+
+  5. **Port conflict:** If port 80 or 8080 is in use on your host, change `FRONTEND_PORT` or `APP_PORT` in `.env`:
+     ```ini
+     FRONTEND_PORT=8888
+     APP_PORT=18080
+     ```
+</Accordion>
+
+<Accordion title="Swagger UI not showing in development">
+  **Symptom:** Navigating to `http://localhost:8080/swagger/index.html` returns 404.
+
+  **Cause:** Swagger is only available when `GIN_MODE=debug`. In `release` mode it is disabled entirely.
+
+  **Fix:** In `.env`, set:
+  ```ini
+  GIN_MODE=debug
+  ```
+  Then recreate the app container:
+  ```bash
+  docker compose up -d app
+  ```
+
+  <Warning>
+    Never run with `GIN_MODE=debug` on a production or public-facing deployment. Debug mode exposes detailed error messages and the full API schema.
+  </Warning>
+</Accordion>
+
+<Accordion title="Registration page not showing or login returns HTML 404">
+  **Symptom:** The login page has no registration tab, or clicking login returns an unexpected HTML error page.
+
+  **Registration tab missing:**
+  - The system may be in invite-only mode. Check: `GET http://localhost:8080/api/v1/auth/config` and look at `registration_mode`.
+  - It may have been set via the system settings UI (database), which takes precedence over `DISABLE_REGISTRATION`. To re-enable: go to **Settings → System** and change `auth.registration_mode` back to `self_serve`.
+
+  **Login returns HTML 404:**
+  - Check whether `SEARXNG_PORT` equals `APP_PORT` (both default would be 8080 if not changed). On Linux, SearXNG bound to `127.0.0.1:8080` intercepts `localhost:8080` before the app does.
+  - Fix: ensure `SEARXNG_PORT=8888` (or any value other than `APP_PORT`).
+</Accordion>
+
+---
+
+## Model Connection Failures
+
+<Accordion title="Ollama model not detected or returns connection error">
+  **Symptom:** The initialization wizard shows Ollama as unavailable, or chat returns a connection error when using a local model.
+
+  **Diagnosis:**
+  ```bash
+  # Test from inside the app container
+  docker exec WeKnora-app curl -s http://host.docker.internal:11434/api/tags
+  ```
+
+  **Common causes and fixes:**
+
+  1. **Ollama is not running on the host.** Start it:
+     ```bash
+     ollama serve > /dev/null 2>&1 &
+     ```
+
+  2. **Wrong `OLLAMA_BASE_URL`.** Inside a Docker container, `localhost` points to the container itself, not the host. The correct URL is:
+     ```ini
+     OLLAMA_BASE_URL=http://host.docker.internal:11434
+     ```
+     On Linux, verify that `extra_hosts: host.docker.internal:host-gateway` is present in the `app` service definition in `docker-compose.yml` (it is included by default in the official file).
+
+  3. **Model not pulled.** The model name must match an already-downloaded model:
+     ```bash
+     ollama pull qwen3:8b
+     ollama pull nomic-embed-text
+     ```
+
+  4. **`OLLAMA_OPTIONAL=true`** (default): If Ollama is unavailable, the app starts anyway but logs a warning. If you need startup to fail when Ollama is unreachable, set `OLLAMA_OPTIONAL=false`.
+</Accordion>
+
+<Accordion title="Remote LLM API returns 401 or connection refused">
+  **Symptom:** Model test in the settings UI fails with authentication or network error.
+
+  **Steps:**
+
+  1. Verify the API key and base URL in **Settings → Models** by running the built-in connectivity test.
+  2. Check SSRF protection—WeKnora blocks requests to private/loopback addresses by default. If the model endpoint is on a private network, add its hostname to `SSRF_WHITELIST`:
+     ```ini
+     SSRF_WHITELIST=my-internal-llm.corp.example.com
+     ```
+     Then restart app: `docker compose up -d app`.
+  3. For outbound connection timeouts, increase the dial timeout:
+     ```ini
+     WEKNORA_OUTBOUND_DIAL_TIMEOUT=15s
+     ```
+  4. Enable LLM stream dumps for detailed request/response inspection:
+     ```ini
+     LLM_DEBUG_LOG=true
+     ```
+     Dumps appear in the same directory as `LOG_PATH`.
+</Accordion>
+
+---
+
+## Document Parsing Issues
+
+<Accordion title="Document stuck in 'processing' state">
+  **Symptom:** An uploaded document never progresses past `processing`, even after many minutes.
+
+  **Diagnosis:**
+  ```bash
+  docker compose logs --tail=300 docreader
+  docker compose logs --tail=300 app | grep -i "docreader\|parse\|error"
+  ```
+
+  **Common causes:**
+
+  1. **File too large.** Default limit is 50 MB (`MAX_FILE_SIZE_MB`). Increase it and restart all three layers:
+     ```ini
+     MAX_FILE_SIZE_MB=200
+     ```
+     Restart: `docker compose up -d app frontend docreader`
+
+  2. **Processing timeout.** Default document task timeout is 2 hours (`WEKNORA_DOCUMENT_PROCESS_TIMEOUT`). For very large or complex documents, increase it:
+     ```ini
+     WEKNORA_DOCUMENT_PROCESS_TIMEOUT=4h
+     WEKNORA_DOCREADER_CALL_TIMEOUT=3h30m
+     ```
+
+  3. **docreader container unhealthy.** Check health:
+     ```bash
+     docker compose ps docreader
+     docker exec WeKnora-docreader grpc_health_probe -addr=localhost:50051
+     ```
+     If the gRPC health probe fails, restart docreader:
+     ```bash
+     docker compose restart docreader
+     ```
+
+  4. **Scanned PDF with no text layer.** Enable scanned mode for better OCR:
+     ```ini
+     DOCREADER_PDF_FORCE_SCANNED=true
+     ```
+     This increases processing time and LLM cost but produces better results for image-only PDFs.
+
+  5. **Task queue backlog.** Check the task dashboard in **Settings → Task Queue** for failed or stuck tasks.
+</Accordion>
+
+<Accordion title="Documents parsed but no results returned in chat">
+  **Symptom:** Parse status shows `completed` and chunk count is non-zero, but Q&A returns no citations or says it cannot find relevant content.
+
+  **Possible causes:**
+
+  1. **Vector threshold too high.** The default `vector_threshold=0.2` may filter out relevant chunks if the embedding model's similarity scores are generally lower. Try reducing it in the knowledge base **Retrieval** settings.
+
+  2. **Embedding model mismatch.** If the knowledge base was initialized with one embedding model and then the model was changed or removed, existing chunks cannot be retrieved. Reinitialize the knowledge base (which rebuilds all embeddings) or re-upload documents.
+
+  3. **Parse status is `completed` but chunks are zero.** Open the document detail page to view the parsing trace timeline. A zero-chunk result often means the document was empty, the file format was not recognized, or all extracted text was below the minimum chunk size.
+
+  4. **Knowledge base not selected in chat.** The chat view requires you to explicitly select one or more knowledge bases. Check the knowledge base selector in the session header.
+</Accordion>
+
+---
+
+## Vector Database Issues
+
+<Accordion title="Vector database connection refused or SSRF blocked">
+  **Symptom:** WeKnora logs show a vector DB connection error, or the settings UI rejects the connection URL with a security error.
+
+  **Diagnosis:**
+  ```bash
+  docker compose logs app | grep -i "vector\|qdrant\|milvus\|retrieve\|SSRF"
+  ```
+
+  **SSRF protection:** WeKnora's SSRF guard blocks connections to internal Docker service names by default (except those pre-listed in `SSRF_WHITELIST_EXTRA`). The default whitelist already includes `qdrant`, `milvus`, `weaviate`, `doris-fe`, `doris-be`, and `minio`. If you are using a custom hostname or an unusual port (e.g. Elasticsearch on port 9200), add it:
+
+  ```ini
+  # Add to existing entries—overriding SSRF_WHITELIST_EXTRA removes the defaults
+  SSRF_WHITELIST_EXTRA=searxng,qdrant,milvus,weaviate,doris-fe,doris-be,minio,my-opensearch.internal
+  ```
+
+  **Container not started:** Ensure the relevant profile is active:
+  ```bash
+  docker compose --profile qdrant up -d
+  ```
+
+  **Driver mismatch:** `RETRIEVE_DRIVER` must match the running database:
+  ```ini
+  RETRIEVE_DRIVER=qdrant  # not postgres
+  QDRANT_HOST=qdrant
+  QDRANT_PORT=6334
+  QDRANT_COLLECTION=weknora_embeddings
+  ```
+</Accordion>
+
+---
+
+## Database Migration Issues
+
+<Accordion title="Migration fails on startup or shows dirty state">
+  **Symptom:** The app starts but **Settings → System Info** shows a `dirty=true` migration state, or the logs contain migration error messages.
+
+  **Important:** Do not assume a failed migration has fully rolled back. The actual state depends on the SQL transaction boundaries and failure point. Always back up the database before attempting recovery.
+
+  **Check current migration state:**
+  ```bash
+  make migrate-version
+  # Or directly in PostgreSQL:
+  # SELECT version, dirty FROM schema_migrations;
+  ```
+
+  **Auto-recovery:** `AUTO_RECOVER_DIRTY=true` (default) attempts to clear the dirty flag and re-run the migration on restart. This is a retry mechanism—it cannot fix missing PostgreSQL extensions, full disks, or schema drift from manual edits.
+
+  **Manual recovery:** Stop all writes to the database, then:
+  ```bash
+  # After confirming the database matches the last successful version (e.g. 98):
+  make migrate-force version=98
+  make migrate-up
+  ```
+
+  <Warning>
+    `migrate-force` only rewrites the migration version marker. It does **not** execute rollback SQL. Only use it after confirming the database schema actually matches the target version. Using the wrong version number can corrupt the database state.
+  </Warning>
+
+  **Missing PostgreSQL extensions:**
+  ```sql
+  SELECT name, installed_version
+  FROM pg_available_extensions
+  WHERE name IN ('pg_trgm', 'vector', 'pg_search');
+  ```
+  `pg_trgm` and `vector` (pgvector) are required. `pg_search` (BM25) is provided by the ParadeDB image. If they are missing, verify you are using the correct ParadeDB image (`paradedb/paradedb:v0.25.11-pg17`) and not a plain PostgreSQL image.
+</Accordion>
+
+<Accordion title="Upgrade causes permissions errors or broken UI features">
+  **Symptom:** After pulling a new version, certain features return 403 or the UI behaves unexpectedly.
+
+  1. Verify the migration ran successfully: **Settings → System Info → Migration version**.
+  2. Check whether `SYSTEM_AES_KEY` is set correctly. Changing this key between versions makes all encrypted credentials (model API keys, vector DB passwords) unreadable in the UI (they appear blank and must be re-entered).
+  3. For v0.8.2 upgrades specifically:
+     - DingTalk channels switched from webhook to Stream mode. Re-enable Stream mode in the DingTalk developer console.
+     - Embed session signing changed algorithm. All embed sessions issued before the upgrade are invalidated—visitors must re-enter via the embed URL.
+     - If you see `embed session signing key is not configured` in logs, set `SYSTEM_SIGNING_KEY`:
+       ```ini
+       SYSTEM_SIGNING_KEY=<openssl rand -hex 32>
+       ```
+       Do **not** change `SYSTEM_AES_KEY` for this—doing so destroys all encrypted data.
+</Accordion>
+
+---
+
+## Observability Issues
+
+<Accordion title="Langfuse traces not appearing">
+  **Symptom:** Agent calls complete but no traces appear in the Langfuse dashboard.
+
+  **Check:** Langfuse tracing is only enabled when **both** `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are non-empty. Verify:
+  ```bash
+  docker compose exec app env | grep LANGFUSE
+  ```
+
+  **Self-hosted Langfuse startup:** ClickHouse migrations take 1–2 minutes on first start. Wait for `langfuse-web` to become healthy before testing:
+  ```bash
+  docker compose logs --tail=100 langfuse-web
+  ```
+
+  **Host mismatch:** For self-hosted Langfuse, `LANGFUSE_HOST` must be `http://langfuse-web:3000` (the Docker service name), not `http://localhost:3000`:
+  ```ini
+  LANGFUSE_HOST=http://langfuse-web:3000
+  ```
+  After changing this, restart app: `docker compose up -d app`.
+</Accordion>
+
+---
+
+## MinIO Issues
+
+<Accordion title="MinIO image pull fails with 401 UNAUTHORIZED">
+  **Symptom:** `docker compose pull` fails with `pull access denied` or `401 UNAUTHORIZED` for the MinIO image.
+
+  **Cause:** MinIO's official Docker Hub image no longer supports anonymous pulls. WeKnora's `docker-compose.yml` uses the community-maintained `pgsty/minio` image, which is publicly accessible. If you have a custom compose file using `minio/minio`, update it to `pgsty/minio:RELEASE.2026-08-04T00-00-00Z`.
+</Accordion>
+
+---
+
+## Getting More Help
+
+When filing an issue, include:
+
+- Application version (from **Settings → System Info**)
+- Database migration version and `dirty` state
+- Full error message with timestamps (redact tokens, passwords, API keys, and document content before sharing)
+- Database driver and version
+- Any non-default environment variables relevant to the problem
+
+Project issues: [github.com/Tencent/WeKnora/issues](https://github.com/Tencent/WeKnora/issues)

@@ -1,0 +1,339 @@
+---
+title: "Sandbox Deployment: Docker, E2B, and Cube Backends"
+sidebarTitle: "Sandbox Deploy"
+description: "Deploy and configure Docker, E2B, and Cube sandbox backends for WeKnora skill execution, including network policy, session persistence, and custom sandbox images."
+---
+
+WeKnora skills run in sandboxes — isolated, session-persistent execution environments that provide each agent conversation with its own workspace, a shell, and optionally a graphical desktop. This guide covers the three server-side sandbox backends (Docker, E2B, and CubeSandbox), the standard sandbox image, how to configure each backend through the settings UI, network policy, session persistence, and how to build a custom sandbox image. The Lite desktop client's macOS host sandbox is also documented here.
+
+<Note>
+  For skill usage, installation, and the `skill_rollout` update strategies, see [Skills and Sandbox](../features/skills-sandbox). For the sandbox and skill REST API, see [Agents API](../api/agents).
+</Note>
+
+---
+
+## Standard Sandbox Image
+
+The standard sandbox image is defined by `docker/Dockerfile.sandbox` and published as **`wechatopenai/weknora-sandbox`**. It includes Python 3.12, Node.js 20, Bash, jq, and a `/workspace` directory. Commands and file operations run as `root` by default; UID 1000 (`user`) is reserved for explicit per-account execution.
+
+| Build target | Tag suffix | Purpose |
+|-------------|-----------|---------|
+| `sandbox` | _(none)_ | Docker session image; E2B CLI template base image |
+| `cube` | `-cube` | Cube CLI template — includes envd |
+| `desktop` | `-desktop` | E2B graphical desktop template base image |
+| `desktop-cube` | `-desktop-cube` | Cube graphical desktop template — includes envd |
+
+Full image name format: `wechatopenai/weknora-sandbox:<version><suffix>`.
+
+<Warning>
+  Template IDs belong to a specific cluster or account — do not copy template IDs from another deployment. Production templates should correspond to a verified application version.
+</Warning>
+
+---
+
+## Choosing and Configuring a Backend
+
+Space-level sandbox configurations are managed in **Settings → Sandbox Config**. Each named configuration binds to one backend. After saving a configuration, select it in an agent's settings to use it.
+
+<Tabs>
+  <Tab title="Docker">
+
+Docker is the default backend for self-hosted deployments. It is **disabled by default** and must be enabled by a system administrator in **System Settings → Network & Security**. As a fallback, set `WEKNORA_SANDBOX_DOCKER_ENABLED=true` before the setting has been persisted to the database.
+
+One configuration maps to one Docker daemon. One session uses one long-running container. There is no cross-host scheduling — if multiple `app` replicas each connect to their own local daemon, they cannot share containers or skill snapshots.
+
+**Configuration options:**
+
+| Setting | Default / Requirement |
+|---------|----------------------|
+| Daemon address | Leave empty to detect `DOCKER_HOST` or current Docker context; remote: `tcp://host:2376` |
+| TLS certificate directory | Required for remote TCP — app-readable directory containing `ca.pem`, `cert.pem`, `key.pem` |
+| CPU / Memory / PID limits | 2 cores / 2 GiB / 512 processes |
+| Idle TTL | 1800 seconds |
+| Network mode | `bridge` or `none` only — `host`, `container:`, and custom network names are not accepted |
+| OCI runtime | Optional; selects an already-installed runtime on the daemon (e.g. `runsc`) |
+
+**Running app in a container:**
+
+If the WeKnora app itself runs in Docker, mount the actual Docker socket or connect to a remote daemon. The socket grants full control over the host's Docker — only give it to a trusted app. The entrypoint script configures the `appuser` group from the socket's GID before dropping privileges. Do not use `chmod 666` on the socket.
+
+**Skill snapshots and disk usage:**
+
+Skill installation uses `docker commit` to create `weknora-skill/` local images. Subsequent sessions start from the installed snapshot. Snapshots preserve filesystem state but not memory. Incremental snapshots inherit parent image layers — removing an old tag does not guarantee disk reclamation, and uninstalling a skill adds a deletion-marker layer while the original files may remain in parent layers. Monitor layer count and disk usage; confirm no active sessions or snapshots reference an image before cleaning up.
+
+  </Tab>
+  <Tab title="E2B">
+
+E2B uses a REST control plane and an envd data-plane gateway. WeKnora communicates with both to create, execute commands in, and destroy sandboxes.
+
+**Setup steps:**
+
+<Steps>
+
+### Prepare control plane and gateway
+
+Obtain a working E2B control-plane URL, data-plane proxy URL, sandbox domain, and credentials.
+
+### Configure the space sandbox
+
+In Space Settings → Sandbox Config, fill in the API URL, Proxy URL, domain, and credentials. Private / loopback endpoints require explicitly enabling private address access (cloud metadata addresses remain blocked regardless).
+
+### Verify the connection
+
+Click **Connect & Continue**. A successful connection check confirms the control plane is reachable — it does not validate the data plane.
+
+### Select or create a template
+
+If the standard template is missing, create it using the E2B CLI with `docker/Dockerfile.sandbox` (`--target sandbox`) as the base. For desktop support, create a separate desktop template (`--target desktop`). Wait until the template status is `READY` before selecting it.
+
+### Run full validation
+
+Click **Full Validation** to create a real sandbox, run probes, and destroy it. This confirms the data plane and script environment are both functional. Passing connection validation but failing execution usually points to Proxy, sandbox domain, gateway routing, or inbound credentials issues.
+
+### Save and test
+
+Save the configuration, select it in an agent, and verify attachment reads, command state persistence, and artifact downloads.
+
+</Steps>
+
+**`proxy_url` detail:** The proxy URL is for self-hosted data-plane gateways. When connecting via the gateway, it preserves the sandbox Host routing — useful in environments without wildcard DNS.
+
+  </Tab>
+  <Tab title="CubeSandbox">
+
+CubeSandbox uses a dedicated adapter that handles Cube-specific template and network-policy APIs. The setup flow mirrors E2B, with a few important differences.
+
+**Setup steps:**
+
+<Steps>
+
+### Prepare control plane and gateway
+
+Obtain a Cube control-plane URL, data-plane proxy URL, sandbox domain, and credentials.
+
+### Configure the space sandbox
+
+In Space Settings → Sandbox Config, fill in the API URL, Proxy URL, domain, and credentials.
+
+### Verify the connection
+
+Click **Connect & Continue** to confirm the control plane is reachable.
+
+### Select or create a Cube template
+
+Use the `-cube` image variant — it includes envd, which provides the `/health` endpoint on port 49983. A plain Docker image will not work with the Cube adapter. Wait for template status `READY`.
+
+<Warning>
+  The `exposedPorts` in a Cube desktop template should only expose envd's port 49983. **Do not add port 6080 to host NAT** — the desktop must be relayed through the gateway and WeKnora, not accessed directly.
+</Warning>
+
+### Run full validation
+
+Click **Full Validation** to confirm the data plane is functional.
+
+### Save and test
+
+Save the configuration, select it in an agent, and verify the full workflow.
+
+</Steps>
+
+**Network policy and DNS:**
+
+Cube guest DNS is part of the template configuration. After changing DNS or the base image, the template must be rebuilt before those settings take effect in new sandboxes. A configuration with installed skills cannot have its base template replaced in place — create a new configuration and reinstall skills to avoid snapshot-vs-base mismatches.
+
+  </Tab>
+</Tabs>
+
+---
+
+## Validation Levels
+
+When saving a sandbox configuration, two validation levels are available:
+
+| Level | What it does |
+|-------|-------------|
+| **Connection check** ("Connect & Continue") | Verifies the control plane is reachable and loads the template list. Does not create a sandbox. |
+| **Full validation** | Creates a real sandbox, executes probe commands, and destroys the sandbox. Confirms the data plane, script environment, and network path are all functional. |
+
+Always run full validation before deploying to production or after changing proxy, domain, or credential settings.
+
+---
+
+## Network Policy Per Tenant
+
+Each space configuration carries its own network policy. Key points:
+
+- Allowing private addresses for the control plane does **not** automatically allow scripts running inside the sandbox to reach private networks.
+- DNS for Cube sandboxes is configured at the template level — scripts see the template's DNS, not the host's.
+- Default outbound policy (in templates built from the standard image) blocks outbound connections. Skill installation and session execution share the same network policy, so if installation needs to pull packages, outbound to those package sources must be explicitly permitted.
+
+---
+
+## `skill_rollout` Options
+
+When a skill is updated, the `skill_rollout` field controls when sessions pick up the new version:
+
+| Value | Behaviour |
+|-------|-----------|
+| `next_turn` | The current session switches to the updated snapshot at the start of the next turn |
+| `new_session` | Only new sessions use the updated snapshot; existing sessions continue with the installed version |
+
+Existing sandboxes are not automatically updated when backend configuration changes — only newly created sessions pick up changes.
+
+---
+
+## Session Persistence Model
+
+Within a single conversation, all turns share **one** sandbox instance. The workspace directory (`/workspace`) persists across turns in the same session. Generated files accumulate in the session and are collected in the artifacts library.
+
+- **Docker**: the sandbox is a long-running container. Idle cleanup is triggered by Create/Connect operations and runs in the background, using the TTL recorded at container creation time. There is no hard lifetime — scripts can keep the container alive indefinitely by updating the activity marker. Monitor long-lived containers separately.
+- **E2B / Cube**: session-to-sandbox binding is stored in Redis (required for multi-replica deployments). Without shared Redis, session bindings are in-memory and are lost on process restart.
+
+<Warning>
+  For multi-replica deployments, **shared Redis is required** to maintain session-to-sandbox bindings and desktop state. In-memory storage is only acceptable for single-instance development.
+</Warning>
+
+### Session forking
+
+Sessions can be forked from any earlier message. When forking, WeKnora snapshots the sandbox state before creating the fork, storing the reference in `fork_snapshot_leases`. Failed forks or interrupted processes leave lease records that are cleaned up by a background job.
+
+---
+
+## Interactive Terminal and Graphical Desktop
+
+The chat sidebar exposes an interactive terminal (Docker, E2B, Cube) and graphical desktop (E2B, Cube only).
+
+Because browsers cannot send authentication headers in a WebSocket handshake, both features use a two-step ticket flow:
+
+| Capability | Ticket endpoint | WebSocket endpoint |
+|-----------|----------------|-------------------|
+| Terminal | `POST /api/v1/sessions/:id/sandbox/terminal-ticket` | `GET /api/v1/sessions/:id/sandbox/terminal?ticket=...` |
+| Desktop | `POST /api/v1/sessions/:id/sandbox/desktop-ticket` | `GET /api/v1/sessions/:id/sandbox/desktop?ticket=...` |
+
+Tickets are valid for two minutes and consumed on first use. Any reverse proxy in front of WeKnora must:
+- Forward WebSocket `Upgrade` for both paths.
+- Allow relaxed read timeouts on these paths.
+- Not log the `ticket` query parameter in access logs.
+
+The standard frontend Nginx already configures a query-stripped log format for `^/api/v1/sessions/[^/]+/sandbox/(terminal|desktop)$`.
+
+The server re-checks login status, space membership, and session ownership approximately once per minute while a terminal is connected. Logout or removal from the space disconnects the terminal immediately.
+
+**Idle disconnect** is controlled by `terminal_idle_disconnect_sec` (default 900 s, minimum 60 s, maximum 24 hours). Terminal activity is counted as keyboard input and PTY output; desktop activity is counted as keyboard and mouse events.
+
+### Docker terminal behaviour
+
+Docker terminals use a `TTY=true` exec session. Because the Docker Engine API does not support re-attaching, Docker terminal behaviour differs from Cube/E2B:
+
+- The terminal keeps the idle-reclaim activity marker alive while connected; the container is reclaimed by `DockerIdleTTL` only after the terminal closes.
+- On disconnect (close tab, idle timeout, network interruption), WeKnora sends SIGHUP to the shell and its child processes — foreground tasks end, `nohup` background tasks survive.
+- The frontend does not auto-reconnect Docker terminals; clicking "Reconnect" opens a new shell.
+- If the container has been reclaimed, opening a terminal creates a new sandbox and the previous workspace files are gone.
+
+### Graphical desktop
+
+The desktop relay path:
+
+```
+Browser noVNC → WeKnora ticket relay → Provider gateway → websockify :6080 → local x11vnc :5900
+```
+
+The browser holds no sandbox API key, inbound token, or websockify password. Only one desktop relay per session is allowed at a time; multi-replica slots are coordinated via Redis. After a sandbox rebuild, the client receives a `SANDBOX_REBUILT` notification — the new desktop does not retain temporary files from the previous instance.
+
+---
+
+## Lite Host Sandbox (macOS Seatbelt)
+
+The `host` backend is compiled only into Lite desktop builds (the `desktop` build tag in `cmd/desktop/wails.json`). It is not available in the server edition or the single-binary Lite.
+
+| Platform | Status |
+|---------|--------|
+| macOS | Uses system `sandbox-exec` (Seatbelt) per command. Disabled at startup if unavailable. |
+| Windows | Not implemented — reported as unavailable, never falls back to unsandboxed execution. |
+| Linux | Not supported. |
+
+Each command runs as a new host process — there is no session-level instance, so no session sandbox binding is written and no workspace checkpoints are taken.
+
+User-approved project directories are stored in `desktop-prefs.json` under `project_dirs`. A session can only be bound to a directory explicitly approved by the user (not its subdirectories, and not paths entered manually). The only supported `approval_mode` is `auto` — free read/write within the workspace, network access blocked.
+
+---
+
+## Building a Custom Sandbox Image
+
+To extend the standard image with additional packages or tools:
+
+```dockerfile
+FROM wechatopenai/weknora-sandbox:latest
+
+# Install additional packages
+RUN apt-get update && apt-get install -y \
+    your-package \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pre-install Python packages
+RUN pip install some-library
+```
+
+### Requirements for custom images
+
+The WeKnora sandbox adapter requires the following in any custom image:
+
+| Requirement | Notes |
+|------------|-------|
+| `root` user available | Commands run as root by default |
+| Bash | All adapter command execution uses Bash |
+| GNU `find -printf` | Used for file listing |
+| coreutils `timeout` | Command timeout enforcement (HTTP request cancellation alone does not terminate processes) |
+| Writable workspace | The `/workspace` directory must be writable |
+| Git | Required for session checkpoint and rewind support |
+
+For Docker builds, tag and use the image directly:
+
+```bash
+docker build -f docker/Dockerfile.sandbox --target sandbox \
+  -t my-org/my-custom-sandbox:v1.0 .
+```
+
+For E2B and Cube, build your custom image using their respective CLI tools and create a new template from it.
+
+---
+
+## Development and Integration Testing
+
+Unit tests do not require a real daemon:
+
+```bash
+go test ./internal/sandbox -run 'TestDocker' -count=1
+```
+
+For real Docker integration tests (creates actual containers):
+
+```bash
+# Build the standard sandbox image first
+docker build -f docker/Dockerfile.sandbox --target sandbox \
+  -t wechatopenai/weknora-sandbox:dev .
+
+# Run Docker integration tests
+DOCKER_INTEGRATION_IMAGE=wechatopenai/weknora-sandbox:dev \
+go test -tags=docker_integration ./internal/sandbox \
+  -run '^TestDocker.*Integration' -count=1 -v -timeout=15m
+```
+
+Remote backend integration tests are in `internal/sandbox/cube_integration_test.go` and `e2b_compatible_integration_test.go`. Configure cluster credentials as documented at the top of each file before running.
+
+<Warning>
+  Integration tests create real sandboxes. Confirm all test instances are cleaned up after the test run. Test coverage should include session state persistence, shell reuse, attachment staging, artifact collection, and timeout — not just the Health endpoint.
+</Warning>
+
+---
+
+## Troubleshooting
+
+| Symptom | Where to look |
+|---------|--------------|
+| Connection validation fails | Check whether the API URL is the dashboard URL rather than the API endpoint; verify credentials, TLS settings, and the private address allow-list |
+| Connection succeeds but execution fails | Check Proxy URL, sandbox domain, gateway routing, and inbound token |
+| Template build fails | Review the cluster's build error; confirm the image can be pulled, the architecture matches, and Cube images include envd |
+| Sandbox cannot reach the network | Check template network policy, guest DNS, and cluster egress proxy. Allowing private addresses for the control plane does not grant sandbox scripts the same access |
+| Dependency installation fails | If outbound is blocked by default, confirm package source URLs are explicitly allowed in the network policy |
+| State lost after reconnect | Confirm Redis is shared across replicas, check whether the session TTL expired, and verify whether a skill update triggered a sandbox rebuild |
