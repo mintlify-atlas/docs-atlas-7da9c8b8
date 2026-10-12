@@ -1,7 +1,7 @@
 ---
-title: "Async Task Queue and Worker Pools"
+title: "WeKnora Async Task System: Asynq Queues and Workers"
 sidebarTitle: "Async Tasks"
-description: "WeKnora uses Asynq on Redis across six worker pools for document processing, enrichment, and maintenance; Lite mode substitutes a Redis-free in-process executor."
+description: "WeKnora runs six Asynq worker pools on Redis for document processing, enrichment, and maintenance; Lite mode uses a Redis-free in-process task executor."
 ---
 
 WeKnora's asynchronous task system is the backbone of every time-consuming operation: document parsing, vector indexing, LLM enrichment (summaries, questions, graph extraction), Wiki generation, and data-source sync all run through it. In standard deployments the system uses [Asynq](https://github.com/hibiken/asynq) backed by Redis. In Lite mode, when no Redis is present, a drop-in `SyncTaskExecutor` provides the same task semantics in-process with goroutines.

@@ -1,7 +1,7 @@
 ---
-title: "Auto Wiki: Knowledge Graph and Page Generation"
+title: "Auto Wiki: Document-Driven Encyclopedia Generation"
 sidebarTitle: "Wiki"
-description: "WeKnora automatically generates interlinked wiki pages from knowledge base documents, with a knowledge graph view, in-browser editing, revision history, and rollback support."
+description: "Enable the Wiki index to auto-generate interlinked Markdown pages from documents. Browse, edit, compare revisions, and roll back pages via the WikiBrowser."
 ---
 
 The Wiki feature transforms a collection of documents into a structured, browsable encyclopedia. When you enable the Wiki index on a knowledge base, an agent-driven pipeline reads each document, extracts named entities and concepts, and generates interlinked Markdown pages organized by type. Subsequent document uploads and re-parses incrementally update the wiki—you never need to manually trigger a rebuild.
@@ -131,6 +131,7 @@ All wiki routes are under `/api/v1/knowledgebase/:kb_id/wiki`. There is no anony
 | GET | `/search?q=...` | Full-text search across titles, aliases, summaries, and content |
 | GET | `/revisions/*slug` | List revision history; `?version=N` retrieves a specific version's full content |
 | GET | `/stats` | Page and link statistics |
+| GET | `/lint` | Run quality checks and list potential issues |
 | GET | `/issues` | List open quality issues flagged by agents or users |
 
 ### Write Endpoints (OwnedWikiKBOrAdmin + KBAccessWrite)
@@ -142,6 +143,7 @@ All wiki routes are under `/api/v1/knowledgebase/:kb_id/wiki`. There is no anony
 | PUT | `/move-page` | Move a page to a different folder |
 | POST | `/revert` | Rollback: `{ "slug": "entity/foo", "version": 12 }` |
 | POST | `/rebuild-links` | Rebuild the link graph |
+| POST | `/auto-fix` | Trigger automated wiki issue fixes |
 | PUT | `/issues/:issue_id/status` | Update an issue's status (`pending`, `resolved`, `ignored`) |
 
 ## Wiki Agents

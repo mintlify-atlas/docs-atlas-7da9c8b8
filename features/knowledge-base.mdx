@@ -1,7 +1,7 @@
 ---
-title: "Knowledge Bases: Organize and Query Documents"
+title: "WeKnora Knowledge Bases: Document, FAQ, and Wiki KBs"
 sidebarTitle: "Knowledge Bases"
-description: "Create and manage knowledge bases in WeKnora, upload documents, organize content with folder trees and tags, and fine-tune chunking and indexing settings per knowledge base."
+description: "Create and manage KBs in WeKnora. Upload files, organize with folders and tags, tune chunking and indexing, and edit parsed chunks for precise retrieval."
 ---
 
 A knowledge base is the primary container for organizing related material in WeKnora. Each knowledge base has its own chunking configuration, vector model, retrieval index settings, and optional Wiki and knowledge-graph pipelines. Files, web pages, hand-written Markdown, and FAQ items are managed as knowledge entries; once ingested they are parsed and indexed according to the base's configuration.
@@ -91,7 +91,7 @@ Documents stalled for an extended period are automatically marked as failed with
 
 The parse state machine is:
 
-```
+```text
 pending → processing → finalizing → completed
                      → failed
                      → cancelled
@@ -186,7 +186,7 @@ const (
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `chunk_size` | int | required | Target chunk size in characters |
-| `chunk_overlap` | int | `80` | Overlap between adjacent chunks |
+| `chunk_overlap` | int | — | Overlap between adjacent chunks |
 | `strategy` | string | `""` (= `legacy`) | `auto` / `heading` / `heuristic` / `recursive` / `legacy` |
 | `enable_parent_child` | bool | `false` | Enable parent-child two-level chunking |
 | `parent_chunk_size` | int | `4096` | Parent chunk size (context retrieval) |

@@ -1,7 +1,7 @@
 ---
-title: "WeKnora CLI: Terminal Client for the Full API"
+title: "WeKnora CLI: Full-Featured Terminal Client and MCP Server"
 sidebarTitle: "CLI"
-description: "Install the weknora CLI, authenticate with a profile or env vars, and manage knowledge bases, documents, agents, and chat from your terminal or CI pipeline."
+description: "Install the weknora CLI, authenticate with a profile or env vars, and manage knowledge bases, documents, agents, and chat from your terminal or CI."
 ---
 
 The `weknora` CLI is a full-featured terminal client for every WeKnora API endpoint. It is designed to be AI-agent-first: all output defaults to a symmetric JSON envelope, errors go to stderr with typed error codes, and every destructive command requires explicit confirmation. Human operators can pass `--format text` for readable output. The CLI also doubles as an MCP server when run with `weknora mcp serve`.
@@ -54,7 +54,7 @@ Source lives in `cli/` as an independent Go module (`github.com/Tencent/WeKnora/
 
 ## All Top-Level Commands
 
-```
+```text
 weknora --help
 
 Available Commands:

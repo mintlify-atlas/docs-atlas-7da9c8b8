@@ -1,7 +1,7 @@
 ---
-title: "WeKnora RAG Pipeline: Retrieval Architecture"
+title: "WeKnora RAG Pipeline: Retrieval and Generation Flow"
 sidebarTitle: "RAG Pipeline"
-description: "WeKnora's RAG pipeline flows from query to answer through hybrid search, cross-encoder reranking, eight-step context merging, and streaming LLM generation with inline citations."
+description: "WeKnora's RAG pipeline covers query rewrite, hybrid retrieval, cross-encoder reranking, context merging, and streaming LLM generation with citations."
 ---
 
 WeKnora's retrieval-augmented generation (RAG) pipeline is an **event-driven plugin pipeline**: each processing stage is a plugin implementing a `Plugin` interface, registered on an `EventManager`. An orchestrator triggers events in a dynamically assembled sequence, with plugins chained via a responsibility chain (`next()`). Generation output doesn't write directly to HTTP responses—instead it publishes events through a per-request `EventBus` into a shared `StreamManager` (in-memory or Redis), which the HTTP layer polls every 100 ms to push SSE events to clients. This design naturally supports **disconnect-reconnect resume** and **multi-replica distributed deployment**.
@@ -53,7 +53,7 @@ flowchart TD
 
 The retrieval pipeline is invoked via the knowledge-base retrieve endpoint used by the chat handlers:
 
-```
+```text
 GET /api/v1/knowledge-bases/:id/retrieve
 ```
 
@@ -140,7 +140,7 @@ WeKnora's default retrieval driver (`RETRIEVE_DRIVER=postgres`) uses ParadeDB wh
 
 For each retrieval group, the fusion layer uses **weighted Reciprocal Rank Fusion (RRF)**:
 
-```
+```text
 score = vectorWeight / (k + vectorRank) + keywordWeight / (k + keywordRank)
 ```
 

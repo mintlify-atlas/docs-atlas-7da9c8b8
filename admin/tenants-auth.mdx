@@ -1,7 +1,7 @@
 ---
-title: "Workspaces, RBAC, and Authentication in WeKnora"
+title: "WeKnora Workspaces, RBAC, and Authentication Guide"
 sidebarTitle: "Auth & RBAC"
-description: "Multi-workspace isolation with four roles (Owner/Admin/Contributor/Viewer), scoped API keys with fine-grained capabilities, OIDC SSO, and AES-256-GCM credential encryption."
+description: "Multi-workspace isolation with Owner, Admin, Contributor, and Viewer roles, scoped API keys, OIDC single sign-on, and AES-256-GCM credential encryption."
 ---
 
 WeKnora organizes every resource—knowledge bases, models, agents, sessions, and storage quotas—inside a **workspace** (internally called a `Tenant`). A single user account can join multiple workspaces with different roles in each. An organization layer lets separate workspaces share knowledge bases and agents without merging them into one space.
@@ -165,14 +165,19 @@ WeKnora supports OpenID Connect for SSO login. Configure the provider in your de
 
 | Config key | Env variable | Description |
 |---|---|---|
-| `oidc.enable` | — | Enable OIDC login |
-| `oidc.issuer_url` | — | Expected issuer (used in token validation) |
+| `oidc.enable` | `OIDC_AUTH_ENABLE` | Enable OIDC login |
+| `oidc.issuer_url` | `OIDC_AUTH_ISSUER_URL` | Expected issuer (used in token validation) |
 | `oidc.jwks_uri` | `OIDC_AUTH_JWKS_URI` | JWKS endpoint for signature verification |
-| `oidc.discovery_url` | — | `.well-known/openid-configuration` URL |
-| `oidc.client_id` / `oidc.client_secret` | — | OAuth client credentials |
-| `oidc.provider_display_name` | — | Button label on the login page |
-| `oidc.scopes` | — | OAuth scopes (e.g. `openid email profile`) |
-| `oidc.user_info_mapping.username` / `.email` | — | Claims field mapping (default `name` / `email`) |
+| `oidc.discovery_url` | `OIDC_AUTH_DISCOVERY_URL` | `.well-known/openid-configuration` URL |
+| `oidc.client_id` | `OIDC_AUTH_CLIENT_ID` | OAuth client ID |
+| `oidc.client_secret` | `OIDC_AUTH_CLIENT_SECRET` | OAuth client secret |
+| `oidc.authorization_endpoint` | `OIDC_AUTH_AUTHORIZATION_ENDPOINT` | Authorization endpoint (optional if discovery URL is set) |
+| `oidc.token_endpoint` | `OIDC_AUTH_TOKEN_ENDPOINT` | Token endpoint (optional if discovery URL is set) |
+| `oidc.user_info_endpoint` | `OIDC_AUTH_USER_INFO_ENDPOINT` | UserInfo endpoint (optional if discovery URL is set) |
+| `oidc.provider_display_name` | `OIDC_AUTH_PROVIDER_DISPLAY_NAME` | Button label on the login page |
+| `oidc.scopes` | `OIDC_AUTH_SCOPES` | OAuth scopes (e.g. `openid email profile`) |
+| `oidc.user_info_mapping.username` | `OIDC_USER_INFO_MAPPING_USER_NAME` | Claims field for username (default `name`) |
+| `oidc.user_info_mapping.email` | `OIDC_USER_INFO_MAPPING_EMAIL` | Claims field for email (default `email`) |
 
 The OIDC flow:
 

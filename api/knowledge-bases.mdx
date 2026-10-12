@@ -1,5 +1,5 @@
 ---
-title: "Knowledge Base and Document API Reference"
+title: "WeKnora Knowledge Bases, Documents, and Search API"
 sidebarTitle: "Knowledge Bases"
 description: "CRUD for knowledge bases, document upload via file/URL/manual, parse status polling, hybrid retrieval search, and cross-KB copy and move operations."
 ---
@@ -11,6 +11,8 @@ The Knowledge Base API is the foundation of WeKnora's RAG pipeline. A knowledge 
 ---
 
 ## Create a Knowledge Base
+
+`POST /api/v1/knowledge-bases`
 
 <ParamField body="name" type="string" required>
   Display name for the knowledge base.

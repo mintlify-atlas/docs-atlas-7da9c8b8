@@ -1,7 +1,7 @@
 ---
-title: "Chat Sessions and Messages API Reference"
+title: "WeKnora Chat Sessions, Messages, and SSE API Reference"
 sidebarTitle: "Chat Sessions"
-description: "Create chat sessions, send messages with real-time SSE streaming, load message history, upload attachments, and run knowledge retrieval without a session."
+description: "Create chat sessions, send SSE-streamed messages, load message history, upload session attachments, and run knowledge retrieval without a session."
 ---
 
 WeKnora's chat API is built around sessions — persistent conversation containers that track history, attachments, and generated files. Within a session you send messages and receive streaming responses via Server-Sent Events. Sessions are user-private: only the owning user (or a valid API Key with `chat` capability) can read or write to a session.
@@ -135,13 +135,13 @@ curl -N -X POST $BASE/api/v1/knowledge-chat/s-1 \
 
 ### SSE Event Stream Format
 
-```
+```text
 Content-Type: text/event-stream
 Cache-Control: no-cache
 ```
 
 Each event is:
-```
+```text
 event: message
 data: {"id":"req-1","response_type":"answer","content":"The refund policy...","done":false}
 
@@ -156,13 +156,23 @@ data: {"id":"req-1","response_type":"complete","done":true,"usage":{"prompt_toke
 
 | `response_type` | Description |
 |----------------|-------------|
-| `answer` | Incremental answer text delta |
+| `answer` | Incremental answer text delta (`data.truncated: true` if output was cut by the model's token limit) |
 | `thinking` | Internal reasoning delta (when thinking is enabled) |
 | `tool_call` | Agent is about to call a tool |
 | `tool_result` | Tool execution result (`data.success` indicates success/failure) |
+| `command_output` | Live output from a running command inside the sandbox |
+| `reflection` | Agent's internal reflection on the current state |
 | `references` | Knowledge base citations (`knowledge_references` array) |
-| `tool_approval_required` | Requires human approval before the tool runs |
+| `session_title` | Auto-generated session title on the first turn |
+| `agent_query` | Agent sub-query event; carries `session_id` and `assistant_message_id` |
+| `artifacts_pending` | New generated files are available in the session |
+| `memory_recalled` | Long-term memory items surfaced for this turn |
 | `user_message_injected` | A steered message was delivered to the agent mid-run |
+| `context_compacted` | Context window was compacted to fit within the limit |
+| `tool_approval_required` | Requires human approval before the tool runs |
+| `tool_approval_resolved` | Tool approval decision was made (approve or reject) |
+| `mcp_oauth_required` | MCP service requires OAuth authorization before proceeding |
+| `mcp_oauth_resolved` | MCP OAuth authorization was completed |
 | `error` | Fatal error for the entire turn |
 | `complete` | Turn is finished; includes `usage` |
 

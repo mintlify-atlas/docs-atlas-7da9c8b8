@@ -1,7 +1,7 @@
 ---
-title: "WeKnora: LLM-Powered Knowledge Platform"
+title: "WeKnora: Open-Source LLM Knowledge Platform by Tencent"
 sidebarTitle: "Introduction"
-description: "WeKnora is Tencent's open-source LLM knowledge platform for RAG Q&A, agent reasoning, and auto-wiki—fully self-hostable with 29 LLM vendors and 8 vector DBs."
+description: "WeKnora is Tencent's open-source knowledge platform for RAG Q&A, agent reasoning, and auto-wiki—self-hostable with 29 LLM vendors and 8 vector databases."
 ---
 
 WeKnora is an open-source, LLM-powered knowledge framework built by Tencent for enterprise document understanding, semantic retrieval, and multi-step reasoning. It brings a team's documents together so they can be searched, reasoned over, and kept up to date—all within an environment you control. A Go backend, Vue 3 frontend, and Python document-parsing service (`docreader`) combine into a single deployable stack that works on a laptop or a private Kubernetes cluster.
@@ -26,7 +26,7 @@ All three modes operate on the same knowledge bases, so you build your document 
 
 ### Document Ingestion and Parsing
 
-WeKnora accepts PDF, Word, Excel, PowerPoint, Markdown, HTML, EPUB, MHTML, XMind, images, and audio files, plus auto-sync from ten external data sources including Feishu, Notion, Confluence, GitLab, DingTalk Docs, Yuque, and RSS. The `docreader` service handles layout-aware text extraction, scanned-page OCR, table extraction, and multimodal image description via a configurable VLM.
+WeKnora accepts PDF, Word, Excel, PowerPoint, Markdown, HTML, EPUB, MHTML, XMind, images, and audio files, plus auto-sync from eleven external data sources including Feishu wiki, Feishu Drive, Lark, Notion, Confluence, GitLab, Tencent IMA, DingTalk Docs, Yuque, Seafile, and RSS. The `docreader` service handles layout-aware text extraction, scanned-page OCR, table extraction, and multimodal image description via a configurable VLM.
 
 ### Retrieval Pipeline
 
@@ -42,7 +42,7 @@ Keyword (BM25) and vector search are fused with RRF, optionally reranked, and ca
     PostgreSQL (pgvector + BM25 via ParadeDB), Elasticsearch, OpenSearch, Milvus, Weaviate, Qdrant, Apache Doris, and Tencent VectorDB.
   </Card>
   <Card title="10 IM Channels" icon="message">
-    WeCom, Feishu/Lark, QQBot, Slack, Telegram, DingTalk, Mattermost, WeChat, and Yunzhijia—deploy a Q&A bot in minutes.
+    WeCom, Feishu, Lark, QQBot, Slack, Telegram, DingTalk, Mattermost, WeChat, and Yunzhijia—deploy a Q&A bot in minutes.
   </Card>
   <Card title="MCP Server Built In" icon="plug">
     Every workspace gets its own `/mcp/<endpoint_id>` over Streamable HTTP, scoped to specific knowledge bases and tool groups, for Cursor, Claude, and other MCP clients.
@@ -82,7 +82,7 @@ Langfuse traces every agent step, tool call, and token usage. The document parsi
 
 WeKnora's architecture is a modular pipeline from document parsing, vectorization, and retrieval to LLM inference. Every component—LLM provider, vector store, object storage backend—can be replaced or extended independently. The frontend Nginx container reverse-proxies `/api/` to the Go backend on port 8080, and the `docreader` gRPC service runs isolated on port 50051 inside the Docker network.
 
-```
+```text
 Browser / SDK / CLI
         │
    frontend :80  (Nginx SPA + reverse proxy)

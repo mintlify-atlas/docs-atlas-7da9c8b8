@@ -1,7 +1,7 @@
 ---
-title: "Agent Engine: Multi-Step Reasoning with Tools"
+title: "WeKnora ReAct Agent Engine: Multi-Step Tool Reasoning"
 sidebarTitle: "Agent"
-description: "WeKnora's ReAct agent supports quick Q&A and smart reasoning modes, MCP tools with human-in-the-loop approval, persistent skills, long-term memory, and conversation control features."
+description: "Agents run in quick-answer or smart-reasoning mode, calling KB search, web, MCP, and sandbox tools with human-in-the-loop approval and long-term memory."
 ---
 
 The WeKnora agent engine lets you build assistants that combine knowledge base retrieval, web search, external tools, and code execution to handle multi-step tasks. Unlike a simple RAG pipeline, the agent operates as a ReAct loop: it reasons about the task, selects and executes tools, observes results, and continues iterating until it can produce a grounded final answer.
@@ -53,7 +53,7 @@ WeKnora ships several built-in agents that can be used immediately without confi
 | `builtin-smart-reasoning` | Smart Reasoning | `smart-reasoning` / `rag-qa` | `max_iterations: 50`; tools: search, read, list, graph query; web search on |
 | `builtin-data-analyst` | Data Analyst | `smart-reasoning` / `data-analysis` | temperature 0.3; tools: `data_schema` + `data_analysis` (DuckDB); CSV/XLSX only; web search off |
 | `builtin-wiki-researcher` | Wiki Q&A | `smart-reasoning` / `wiki-qa` | tools: wiki_search, wiki_read_page, read_document, wiki_flag_issue; web search off |
-| `builtin-wiki-fixer` | Wiki Editor | `smart-reasoning` / `custom` | 9 wiki tools including write/rename/delete; `retain_retrieval_history: true` |
+| `builtin-wiki-fixer` | Wiki Editor | `smart-reasoning` / `custom` | 9 wiki tools: wiki_search, wiki_read_page, read_document, wiki_write_page, wiki_replace_text, wiki_rename_page, wiki_delete_page, wiki_read_issue, wiki_update_issue; `retain_retrieval_history: true` |
 
 ## Tool Scope and Available Tools
 
@@ -67,7 +67,7 @@ The agent's `allowed_tools` list determines which tools are registered. Key tool
     `web_search` (Brave, Serply, and others), `web_fetch` (SSRF-safe browser rendering, up to 8 URLs in parallel)
   </Card>
   <Card title="Wiki Tools" icon="book">
-    `wiki_search`, `wiki_read_page`, `wiki_write_page`, `wiki_replace_text`, `wiki_rename_page`, `wiki_delete_page`, `wiki_flag_issue`
+    `wiki_search`, `wiki_read_page`, `wiki_write_page`, `wiki_replace_text`, `wiki_rename_page`, `wiki_delete_page`, `wiki_flag_issue`, `wiki_read_issue`, `wiki_update_issue`
   </Card>
   <Card title="Sandbox Tools" icon="terminal">
     `shell_exec` (in-sandbox command execution), `read_file`, `write_sandbox_file`, `edit_sandbox_file`, `list_sandbox_files`

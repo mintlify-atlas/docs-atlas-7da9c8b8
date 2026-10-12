@@ -1,7 +1,7 @@
 ---
-title: "Configure WeKnora: Environment Variables Guide"
+title: "WeKnora Configuration: Environment Variables Reference"
 sidebarTitle: "Configuration"
-description: "Complete reference for WeKnora's .env configuration groups: required secrets, database, retrieval, models, auth, agent sandbox, observability, and security."
+description: "Complete reference for WeKnora .env groups: required secrets, database, retrieval, models, auth, agent sandbox, observability, and security settings."
 ---
 
 WeKnora reads its configuration from four layers, applied in order from lowest to highest priority: the `config/config.yaml` file (shipped with the image), environment variables in `.env` (deployment-level overrides), and runtime system settings stored in the database (editable at **Settings → System** in the UI, taking precedence over environment variables and requiring no restart for most keys).
@@ -119,7 +119,7 @@ These variables control the image version, Gin runtime mode, logging, timezone, 
 ### B1. PostgreSQL (required)
 
 <Warning>
-  `DB_USER`, `DB_PASSWORD`, and `DB_NAME` are required. The default values in `.env.example` are placeholders—change them before any network-accessible deployment.
+  `DB_USER`, `DB_PASSWORD`, and `DB_NAME` are required. The `.env.example` ships with `DB_USER=postgres`, `DB_PASSWORD=postgres123!@#`, and `DB_NAME=WeKnora` as example values—always replace them with strong credentials before any network-accessible deployment.
 </Warning>
 
 | Variable | Default | Description |

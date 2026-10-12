@@ -1,7 +1,7 @@
 ---
-title: "Document Parsing: Supported Formats and Config"
+title: "Document Parsing: Supported Formats and gRPC Pipeline"
 sidebarTitle: "Document Parsing"
-description: "WeKnora supports 25+ file formats via the docreader gRPC microservice, with per-document parsing overrides, OCR and VLM image processing, and a visual parsing timeline."
+description: "Parse 25+ file formats via the docreader gRPC service. Set per-file engine rules, configure OCR and VLM image pipelines, and inspect the parsing timeline."
 ---
 
 Document parsing in WeKnora converts uploaded files into retrievable text and extracts raw image references. The heavy lifting is performed by **docreader**, an independent Python gRPC service that outputs Markdown plus image bytes. The Go application then handles chunking, image storage, OCR via a vision-language model, and vectorization. This separation means docreader contains zero OCR logic—all multimodal processing happens in the Go application tier.
@@ -63,7 +63,7 @@ docker build -f docker/Dockerfile.app --build-arg WITH_ANYDOC=0 -t weknora-app .
 ```
 
 <Warning>
-The `anydoc` engine only extracts the text layer of PDFs. Scanned PDFs with no text layer will fail unless docreader (builtin) is also available, which handles per-page fallback to OCR.
+The `anydoc` engine only extracts the text layer of PDFs. For scanned PDFs with no text layer, anydoc automatically delegates to the docreader `builtin` engine if it is available, which renders pages as JPEG and marks them for OCR. Without a connected docreader service the conversion will fail.
 </Warning>
 
 ## PDF Parsing in Depth

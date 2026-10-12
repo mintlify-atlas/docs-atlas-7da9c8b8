@@ -1,7 +1,7 @@
 ---
-title: "Get Started with WeKnora in 5 Minutes"
+title: "WeKnora Quickstart: Run Your First RAG Q&A in Minutes"
 sidebarTitle: "Quickstart"
-description: "Clone WeKnora, configure your .env, start services with Docker Compose, create a knowledge base, upload a document, and ask your first RAG question."
+description: "Clone WeKnora, configure your .env, start with Docker Compose, create a knowledge base, upload a document, and ask your first RAG question."
 ---
 
 This guide walks you through the fastest path from zero to a working RAG knowledge base: clone the repo, set a handful of environment variables, start the stack with Docker Compose, and send your first question. The whole flow takes about five minutes once the images are pulled. You will need [Docker](https://www.docker.com/), [Docker Compose](https://docs.docker.com/compose/), [Git](https://git-scm.com/), and credentials for at least one LLM provider (or a local Ollama installation).
@@ -182,7 +182,7 @@ The core stack runs without any profiles. Add `--profile` flags to enable additi
 | `neo4j` | Neo4j graph database | Enable GraphRAG (`NEO4J_ENABLE=true`) |
 | `minio` | MinIO object storage | Store files in S3-compatible storage instead of the local volume |
 | `langfuse` | Langfuse + ClickHouse + dedicated MinIO | LLM call tracing and token usage dashboards |
-| `full` | All of the above plus sandbox and the legacy MCP server container | Enable every optional feature at once |
+| `full` | Neo4j, MinIO, Qdrant, SearXNG, Langfuse stack, sandbox, MCP server, and Dex | Enable every optional feature at once |
 
 ```bash
 # Example: enable Neo4j and MinIO

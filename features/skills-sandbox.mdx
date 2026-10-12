@@ -1,7 +1,7 @@
 ---
-title: "Skills and Sandbox: Agents That Run Code"
+title: "WeKnora Skills and Sandbox: Isolated Code Execution"
 sidebarTitle: "Skills & Sandbox"
-description: "Install skills from ClawHub, Git repos, or ZIP files into Docker, E2B, or Cube sandboxes, and give agents a session-persistent workspace with an interactive terminal and graphical desktop."
+description: "Install skills into Docker, E2B, or CubeSandbox so agents run scripts, generate files, and deliver outputs in a session-persistent isolated workspace."
 ---
 
 Skills extend agents with executable capabilities: a skill is a self-contained package containing a `SKILL.md` description, scripts, templates, and supporting resources. When an agent runs in Smart Reasoning mode with a sandbox configured, it can read skill descriptions, execute scripts, generate files, and deliver outputs—all within an isolated, session-persistent workspace.
@@ -117,7 +117,7 @@ Sandbox rebuild discards any temporary state in the running container. Files sav
 
 The variable resolution priority for skill execution is:
 
-```
+```text
 Personal skill variable  >  Personal sandbox variable  >  Space skill variable
 ```
 

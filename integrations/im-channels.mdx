@@ -1,7 +1,7 @@
 ---
-title: "IM Channel Integrations: Bots for 10 Platforms"
+title: "IM Integrations: Connect Agents to 10 Chat Platforms"
 sidebarTitle: "IM Channels"
-description: "Connect WeKnora agents to WeCom, Feishu, Lark, Slack, Telegram, DingTalk, Mattermost, WeChat iLink, QQBot, and Yunzhijia with streaming replies and built-in slash commands."
+description: "Connect WeKnora agents to WeCom, Feishu, Lark, Slack, Telegram, DingTalk, Mattermost, WeChat iLink, QQBot, and Yunzhijia via WebSocket or webhook."
 ---
 
 IM channel integrations let users talk to a WeKnora agent directly inside their existing chat platforms. Once a channel is connected and enabled, users send messages to the bot and receive answers drawn from the agent's configured knowledge bases, tools, and skills — without logging in to WeKnora.
@@ -79,6 +79,12 @@ WeKnora supports 10 IM platforms. The table below summarises their connection mo
     - `outgoing_token` — **Required** — token from the Outgoing Webhook configuration
     - `bot_user_id` — Bot's user ID (for filtering bot's own messages)
     - `post_to_main` — Whether to reply to the main channel or in a thread
+  </Tab>
+  <Tab title="WeChat iLink">
+    - `bot_token` — **Required** — WeChat iLink bot token
+    - `ilink_bot_id` — **Required** — iLink Bot ID
+
+    WeChat iLink channels are always forced to long-poll mode with `output_mode=full`. Streaming replies are not supported.
   </Tab>
   <Tab title="QQBot">
     - `app_id` — QQ Bot App ID

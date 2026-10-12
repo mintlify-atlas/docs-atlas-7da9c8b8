@@ -1,5 +1,5 @@
 ---
-title: "IM and Embed Channel API Reference"
+title: "WeKnora IM Channels and Embed Widget API Reference"
 sidebarTitle: "Channels"
 description: "Manage IM bot channels (Feishu, Slack, WeChat, etc.), embed widget channels, the anonymous token exchange flow, and data source integrations."
 ---
@@ -111,7 +111,7 @@ curl -X DELETE $BASE/api/v1/im-channels/ch-1 \
 
 IM platforms send webhook events to:
 
-```
+```text
 POST /api/v1/im/callback/:channel_id
 GET  /api/v1/im/callback/:channel_id
 ```

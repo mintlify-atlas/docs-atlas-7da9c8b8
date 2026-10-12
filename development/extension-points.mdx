@@ -1,7 +1,7 @@
 ---
-title: "Extension Points: Add Parsers, Backends, and Tools"
+title: "WeKnora Extension Points: Parsers, Engines, and Tools"
 sidebarTitle: "Extension Points"
-description: "Add custom document parsers, retrieval engines, LLM vendors, IM adapters, and agent tools to WeKnora by implementing a well-defined interface and registering it in one place."
+description: "Add custom parsers, retrieval engines, LLM vendors, IM adapters, and agent tools to WeKnora by implementing interfaces and registering them in one place."
 ---
 
 WeKnora is designed around explicit extension points: every major subsystem exposes a Go interface or Python base class, and a central registration entry ties implementations into the dependency graph at startup. Parsers, chunking strategies, retrieval engines, LLM vendors, web search providers, data source connectors, IM adapters, agent tools, and storage backends can all be swapped or extended without touching core logic.
@@ -224,14 +224,15 @@ Engine type constants from `internal/types/retriever.go`:
 const (
     PostgresRetrieverEngineType        RetrieverEngineType = "postgres"
     ElasticsearchRetrieverEngineType   RetrieverEngineType = "elasticsearch"
+    InfinityRetrieverEngineType        RetrieverEngineType = "infinity"
+    ElasticFaissRetrieverEngineType    RetrieverEngineType = "elasticfaiss"
     QdrantRetrieverEngineType          RetrieverEngineType = "qdrant"
     MilvusRetrieverEngineType          RetrieverEngineType = "milvus"
     WeaviateRetrieverEngineType        RetrieverEngineType = "weaviate"
     DorisRetrieverEngineType           RetrieverEngineType = "doris"
     SQLiteRetrieverEngineType          RetrieverEngineType = "sqlite"
-    OpenSearchRetrieverEngineType      RetrieverEngineType = "opensearch"
     TencentVectorDBRetrieverEngineType RetrieverEngineType = "tencent_vectordb"
-    // ...
+    OpenSearchRetrieverEngineType      RetrieverEngineType = "opensearch"
 )
 ```
 

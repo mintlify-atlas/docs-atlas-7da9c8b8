@@ -11,7 +11,7 @@ WeKnora's authentication middleware (in `internal/middleware/auth.go`) inspects 
 
 ### Obtaining a Token
 
-POST credentials to `/api/v1/auth/login`. The response includes a short-lived `token` (access token) and a `refresh_token`.
+POST credentials to `/api/v1/auth/login`. The response includes a short-lived `token` (access token) and a `refresh_token`. Alternatively, WeKnora supports OIDC single-sign-on via `GET /api/v1/auth/oidc/url` (get the authorization URL) and `GET /api/v1/auth/oidc/callback` (handle the redirect). OIDC id_token verification uses JWKS; configure `jwks_uri` in your IdP settings so WeKnora can validate tokens from the provider's public key endpoint.
 
 ```bash
 curl -X POST $BASE/api/v1/auth/login \
@@ -61,10 +61,10 @@ curl $BASE/api/v1/knowledge-bases \
   Passing a malformed or zero value for `X-Tenant-ID` returns HTTP 400. Passing an ID for a workspace you are not a member of returns HTTP 403.
 </Warning>
 
-If a valid JWT carries no workspace and the endpoint is not on the no-tenant whitelist (e.g., `/auth/me`, `/me/invitations`), the server returns:
+If a valid JWT carries no workspace and the endpoint is not on the no-tenant whitelist (e.g., `/auth/me`, `/me/invitations`), the server returns HTTP 409:
 
 ```json
-{ "error": "tenant required", "code": "TENANT_REQUIRED" }
+{ "error": "Workspace required", "code": "TENANT_REQUIRED" }
 ```
 
   </Tab>
@@ -83,7 +83,7 @@ curl $BASE/api/v1/knowledge-bases \
 
 ### Platform Keys
 
-Created at `POST /api/v1/system/admin/api-keys` (requires SystemAdmin). Can target any workspace by adding `X-Tenant-ID`. Without it, the server returns 409 `TENANT_REQUIRED` unless the endpoint is a platform-only route.
+Created at `POST /api/v1/system/admin/api-keys` (requires SystemAdmin). Can target any workspace by adding `X-Tenant-ID`. Without it, the server returns HTTP 409 `{"error":"Workspace required: platform API keys must send X-Tenant-ID","code":"TENANT_REQUIRED"}` unless the endpoint is a platform-only route.
 
 ```bash
 curl $BASE/api/v1/tenants/all \

@@ -1,7 +1,7 @@
 ---
-title: "WeKnora Architecture Overview"
+title: "WeKnora Architecture Overview: Services and Tech Stack"
 sidebarTitle: "Overview"
-description: "WeKnora is built on three core processes—Go backend, Vue frontend, and Python docreader—wired together through a modular, profile-driven deployment model."
+description: "WeKnora runs on three core processes—Go backend, Vue frontend, and Python docreader—wired together via a profile-driven Docker Compose deployment model."
 ---
 
 WeKnora follows a **three-process core architecture**: a Go main service that handles REST APIs, RAG retrieval, the Agent engine, and async task workers; a Vue 3 + NGINX frontend that doubles as a reverse proxy; and a Python gRPC document-parsing microservice. PostgreSQL (ParadeDB) and Redis are the two mandatory infrastructure dependencies. Everything else—vector stores, knowledge graphs, object storage, and observability tooling—is optional and enabled through Docker Compose profiles.
@@ -17,8 +17,6 @@ WeKnora follows a **three-process core architecture**: a Go main service that ha
 | `docreader` | `wechatopenai/weknora-docreader` (Python, `docker/Dockerfile.docreader`) | `50051` (compose network only, not published to host) | Document parsing microservice: gRPC server handling PDF, DOCX, Excel, EPUB, web pages, and 25+ other formats. Health check: `grpc_health_probe` |
 | `postgres` | `paradedb/paradedb:v0.25.11-pg17` | `5432` (network only) | Primary database. ParadeDB includes BM25 full-text search and pgvector, so **no separate vector store is required** by default (`RETRIEVE_DRIVER=postgres`) |
 | `redis` | `redis:7.0-alpine` (`appendonly` + `requirepass`) | `6379` (network only) | Asynq task queue, SSE stream management across instances, `system_settings` pub/sub, rate limiting, and distributed per-model concurrency gates |
-| `sandbox` | `wechatopenai/weknora-sandbox` | — | Standard execution image; used directly for space Docker backend or registered as a template via the CubeSandbox/E2B control plane |
-
 <Note>
 `app` and `docreader` share the `docreader-tmp` volume (mounted at `/tmp/docreader`) to transfer parsed images from the Python service to Go. The `app` container's local file storage volume is `data-files` (at `/data/files`).
 </Note>
@@ -27,6 +25,7 @@ WeKnora follows a **three-process core architecture**: a Go main service that ha
 
 | Service | Profile | Purpose |
 |---------|---------|---------|
+| `sandbox` | `full` | Standard execution image (`wechatopenai/weknora-sandbox`); pulled/built so it is available locally, but the container runs once then exits (`command: ["true"]`, `restart: "no"`). The Docker sandbox backend is disabled by default and requires `WEKNORA_SANDBOX_DOCKER_ENABLED=true` and a mounted `docker.sock`. For CubeSandbox/E2B, the image is registered as a template via the control plane API. |
 | `searxng` (+ one-shot `searxng-init`) | `searxng` / `full` | Self-hosted meta-search engine for Agent web search (default bind: `127.0.0.1:8888`) |
 | `neo4j` | `neo4j` / `full` | Knowledge graph storage (GraphRAG), enabled by `NEO4J_ENABLE`, Bolt on port `7687` |
 | `minio` | `minio` / `full` | Object storage (`STORAGE_TYPE=minio`) |
@@ -74,7 +73,7 @@ The Go backend can also connect directly to external engines not listed in compo
 | Vector / retrieval | pgvector, ES v7/v8, OpenSearch, Qdrant, Milvus, Weaviate, Doris, Tencent VectorDB, sqlite-vec | Driven by `RETRIEVE_DRIVER` and `vector_stores` table |
 | Knowledge graph | `neo4j/neo4j-go-driver/v6` | Optional |
 | Concurrency pool | `panjf2000/ants/v2` | Document processing goroutine pool (`CONCURRENCY_POOL_SIZE`) |
-| MCP | `mark3labs/mcp-go` | v0.52.0 (external MCP tools including OAuth) |
+| MCP | `mark3labs/mcp-go` | v1.1.1 (external MCP tools including OAuth) |
 | Frontend framework | Vue 3 (^3.5) + TypeScript + Vite 7 | `frontend/package.json` |
 | Frontend UI | TDesign Vue Next, Pinia, Vue Router 4, vue-i18n | Marked / KaTeX / Mermaid / highlight.js for rich-text rendering |
 | Document parsing | Python + grpcio | `docreader/main.py`; parsers in `docreader/parser/` |

@@ -1,7 +1,7 @@
 ---
-title: "Document Parsing Pipeline: Ingestion to Vectors"
+title: "WeKnora Document Pipeline: Ingestion to Vector Index"
 sidebarTitle: "Document Pipeline"
-description: "Uploaded documents flow through docreader gRPC parsing, Go-side chunking, batch embedding, and parallel indexing into vector, BM25, graph, and wiki indexes."
+description: "Uploaded documents flow through docreader gRPC parsing, Go-side chunking, batch embedding, and indexing into vector, BM25, graph, and wiki stores."
 ---
 
 WeKnora's document ingestion pipeline is a **distributed asynchronous pipeline built on Asynq and Redis**. HTTP handlers only persist a record and enqueue a task; all time-consuming work—parsing, embedding, and LLM enrichment—is performed by independent worker pools consuming queue tasks. This separation means a slow PDF parse never blocks the API, and failed documents can be retried without re-uploading.

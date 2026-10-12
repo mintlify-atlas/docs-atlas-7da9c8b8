@@ -1,5 +1,5 @@
 ---
-title: "WeKnora REST API Reference Overview"
+title: "WeKnora REST API Overview: Endpoints and Conventions"
 sidebarTitle: "Overview"
 description: "WeKnora's /api/v1 REST API: base URL, versioning, response envelope, error codes, pagination, SSE streaming, and a guide to all resource groups."
 ---
@@ -10,7 +10,7 @@ The WeKnora HTTP API provides programmatic access to every feature of the platfo
 
 Every business endpoint is mounted under the `/api/v1` prefix. For a self-hosted deployment the base URL defaults to:
 
-```
+```bash
 BASE=http://localhost:8080
 ```
 
@@ -71,10 +71,10 @@ Middleware-layer rejections (auth, RBAC) emit a simpler form:
 { "error": "Forbidden" }
 ```
 
-or, for tenant-selection errors:
+or, for tenant-selection errors (JWT path returns HTTP 409):
 
 ```json
-{ "error": "tenant required", "code": "TENANT_REQUIRED" }
+{ "error": "Workspace required", "code": "TENANT_REQUIRED" }
 ```
 
 ### Error Code Reference
@@ -117,7 +117,7 @@ Some endpoints (audit logs, runtime tasks, Wiki) use cursor-based pagination wit
 
 Chat endpoints return [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) with these response headers:
 
-```
+```text
 Content-Type: text/event-stream
 Cache-Control: no-cache
 Connection: keep-alive

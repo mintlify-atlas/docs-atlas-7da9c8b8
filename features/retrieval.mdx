@@ -1,7 +1,7 @@
 ---
-title: "Retrieval Engines: Hybrid Search and Reranking"
+title: "WeKnora Retrieval Engines: Hybrid BM25 and Vectors"
 sidebarTitle: "Retrieval"
-description: "WeKnora supports hybrid BM25 keyword and vector similarity search across 10 backends, with RRF fusion, cross-encoder reranking, parent-child chunking, and optional GraphRAG via Neo4j."
+description: "Choose from pgvector, Elasticsearch, Milvus, Qdrant, Weaviate, Doris, and more. WeKnora fuses BM25 and vector scores with RRF plus optional reranking."
 ---
 
 WeKnora's retrieval layer separates index storage from the fusion logic. Each configured backend provides independent vector and keyword search; a unified Reciprocal Rank Fusion (RRF) layer in the Go application combines results across backends and across knowledge bases. This architecture means you can use multiple backends simultaneously and the scoring remains consistent regardless of which engine produced each hit.
@@ -81,7 +81,7 @@ WeKnora's retrieval layer separates index storage from the fusion logic. Each co
 
 Every driver provides independent vector and keyword search. WeKnora's hybrid search always combines these at the application layer using RRF—not the engine's own hybrid pipeline:
 
-```
+```text
 Query
   ├── Embedding model → vector search (cosine similarity)
   └── Keyword tokenizer → BM25 keyword search
@@ -125,7 +125,7 @@ After RRF fusion, an optional cross-encoder reranker re-scores the top candidate
 
 The composite final score used in the chat pipeline is:
 
-```
+```text
 0.6 × rerank_score + 0.3 × retrieval_base_score + 0.1 × source_weight
 ```
 
@@ -165,12 +165,12 @@ NEO4J_PASSWORD=changeme
 
 A single query expands at most 200 seed entities and returns at most 2,000 rows. The agent tool `query_knowledge_graph` exposes this capability directly.
 
-## Retrieve API Endpoint
+## Hybrid Search API Endpoint
 
 The hybrid search endpoint is available both for internal agent use and for direct API calls:
 
 ```http
-POST /api/v1/knowledge-bases/:id/retrieve
+POST /api/v1/knowledge-bases/:id/hybrid-search
 ```
 
 ### Key Parameters
@@ -212,14 +212,19 @@ Use the chunker preview endpoint (`POST /api/v1/chunker/preview`) to test chunki
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `RETRIEVE_DRIVER` | `postgres` | Comma-separated list of active drivers |
+| `RETRIEVE_DRIVER` | `postgres` | Comma-separated list of active drivers: `postgres`, `sqlite`, `elasticsearch_v7`, `elasticsearch_v8`, `opensearch`, `qdrant`, `milvus`, `weaviate`, `doris`, `tencent_vectordb` |
 | `MULTI_STORE_RETRIEVE_TIMEOUT_SEC` | `30` | Per-store-group timeout for parallel multi-store retrieval |
+| `ELASTICSEARCH_ADDR` / `ELASTICSEARCH_USERNAME` / `ELASTICSEARCH_PASSWORD` | — | Elasticsearch v7 / v8 endpoint and credentials |
+| `OPENSEARCH_ADDR` / `OPENSEARCH_USERNAME` / `OPENSEARCH_PASSWORD` | — | OpenSearch endpoint and credentials (version ≥ 2.11 or 3.x) |
 | `QDRANT_HOST` / `QDRANT_PORT` | `localhost` / `6334` | Qdrant gRPC endpoint |
+| `QDRANT_API_KEY` / `QDRANT_USE_TLS` | — / `false` | Qdrant authentication and TLS |
 | `MILVUS_ADDRESS` | `localhost:19530` | Milvus gRPC endpoint |
-| `MILVUS_METRIC_TYPE` | `IP` | Metric type—changing this requires rebuilding collections |
-| `WEAVIATE_HOST` / `WEAVIATE_GRPC_ADDRESS` | `weaviate:8080` / `weaviate:50051` | Weaviate endpoints |
-| `DORIS_ADDR` / `DORIS_HTTP_PORT` | `doris-fe:9030` / `8030` | Doris FE and HTTP endpoints |
-| `NEO4J_ENABLE` | `false` | Enable graph retrieval |
+| `MILVUS_METRIC_TYPE` | `IP` | Metric type (`IP`, `COSINE`, or `L2`)—changing this requires rebuilding collections |
+| `WEAVIATE_HOST` / `WEAVIATE_GRPC_ADDRESS` | `weaviate:8080` / `weaviate:50051` | Weaviate HTTP and gRPC endpoints |
+| `DORIS_ADDR` / `DORIS_HTTP_PORT` | `doris-fe:9030` / `8030` | Doris FE and HTTP (Stream Load) endpoints |
+| `TENCENT_VECTORDB_ADDR` / `TENCENT_VECTORDB_USERNAME` / `TENCENT_VECTORDB_API_KEY` | — | Tencent VectorDB endpoint and credentials (all three required) |
+| `NEO4J_ENABLE` | `false` | Enable graph retrieval via Neo4j |
+| `NEO4J_URI` / `NEO4J_USERNAME` / `NEO4J_PASSWORD` | `bolt://neo4j:7687` / `neo4j` / — | Neo4j connection details |
 
 <Note>
 A knowledge base's `VectorStoreID` binding cannot be changed after creation. When registering a new `VectorStore` instance via the admin API, existing knowledge bases continue using their original store. Use `move` with `reparse` mode to migrate content to a new store.

@@ -1,7 +1,7 @@
 ---
-title: "Install WeKnora: Docker, Kubernetes, and Lite"
+title: "WeKnora Installation: Docker, Kubernetes, and Lite"
 sidebarTitle: "Installation"
-description: "Deploy WeKnora with Docker Compose, Kubernetes Helm, a Lite single binary, or the Wails-based desktop app—with hardware requirements and upgrade instructions."
+description: "Deploy WeKnora via Docker Compose, Kubernetes Helm, a Lite single binary, or the Wails desktop app, with hardware requirements and upgrade steps."
 ---
 
 WeKnora supports four deployment topologies. Docker Compose is the recommended path for most teams—it handles all service dependencies automatically. Kubernetes Helm is for production clusters. The Lite single binary and desktop app suit personal or offline use where external service dependencies are not practical.
@@ -84,7 +84,7 @@ WeKnora supports four deployment topologies. Docker Compose is the recommended p
     | `weaviate` | Weaviate | 9035, 50052 |
     | `doris` | Apache Doris FE + BE | 8030, 9030, 8040 |
     | `searxng` | SearXNG (self-hosted web search) | 127.0.0.1:8888 |
-    | `full` | All of the above + sandbox + legacy MCP server | — |
+    | `full` | Neo4j, MinIO, Qdrant, SearXNG, Langfuse stack, sandbox, MCP server, and Dex | — |
 
     ```bash
     # Enable Neo4j and MinIO together
@@ -265,7 +265,7 @@ Frontend changes auto-reload. Backend changes restart in 5–10 seconds with Air
 
 ## Common Deployment Topologies
 
-```
+```text
 Single machine (Docker Compose — most common)
   User → frontend :80 → app :8080 → docreader
                                   → postgres

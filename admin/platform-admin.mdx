@@ -1,7 +1,7 @@
 ---
-title: "Platform Administration and System Settings"
+title: "Platform Administration and System Settings in WeKnora"
 sidebarTitle: "Platform Admin"
-description: "System admin controls for all workspaces: create and delete tenants, manage users, configure runtime settings, issue platform API keys, and read the global audit log."
+description: "Manage your WeKnora deployment: create and delete workspaces, reset passwords, configure runtime settings, issue platform API keys, and read audit logs."
 ---
 
 WeKnora distinguishes two separate administrative identities: a **workspace Owner** who controls a single workspace, and a **system admin** who controls the entire deployment. Neither automatically implies the other — being Owner of a workspace does not make you a system admin, and system admins do not automatically inherit access to workspace contents.
@@ -111,7 +111,7 @@ Settings stored in the database take precedence over environment variables at re
 
 | Key | Type | Default | Effect |
 |---|---|---|---|
-| `auth.registration_mode` | `self_serve` / `invite_only` | `self_serve` | Password registration mode (immediate) |
+| `auth.registration_mode` | `self_serve` / `invite_register` / `invite_only` | `self_serve` | Password registration mode (immediate) |
 | `auth.default_tenant_mode` | `create_personal` / `tenantless` | `create_personal` | Auto-create workspace on registration (affects new users only) |
 | `auth.complex_password_enabled` | bool | `false` | Require uppercase, lowercase, digit, and special character in new passwords |
 
